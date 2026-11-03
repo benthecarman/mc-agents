@@ -1,0 +1,10 @@
+target/
+.env
+.direnv/
+logs/
+mc-server/world*/
+mc-server/*.jar
+mc-server/logs/
+mc-server/libraries/
+mc-server/versions/
+mc-server/usercache.json
