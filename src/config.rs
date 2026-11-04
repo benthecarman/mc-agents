@@ -47,6 +47,10 @@ pub struct LlmConfig {
     pub fast_params: std::collections::HashMap<String, toml::Value>,
     #[serde(default)]
     pub strong_params: std::collections::HashMap<String, toml::Value>,
+    /// Tried when a turn's first model call fails, e.g. while the main
+    /// model is out of capacity. Keeps the tier's request params.
+    #[serde(default)]
+    pub fallback_model: Option<String>,
 }
 
 fn default_kind() -> String {

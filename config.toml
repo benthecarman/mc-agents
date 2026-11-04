@@ -9,6 +9,8 @@ base_url_env = "MAPLE_BASE_URL"
 # api_key_env = "OPENAI_API_KEY"
 fast_model = "glm-5-3-flash"
 strong_model = "glm-5-3-flash"
+# Used when the model above fails (Maple sometimes runs out of capacity).
+fallback_model = "glm-5-3"
 fast_model_env = "MAPLE_MODEL"
 strong_model_env = "MAPLE_MODEL"
 # Extra request fields per tier. Low reasoning makes chat replies much faster.

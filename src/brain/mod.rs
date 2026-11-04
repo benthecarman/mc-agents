@@ -64,6 +64,7 @@ pub struct Llm {
     provider: Arc<dyn Provider>,
     fast: ModelConfig,
     strong: ModelConfig,
+    fallback: Option<String>,
     timeout: std::time::Duration,
 }
 
@@ -91,6 +92,7 @@ impl Llm {
             provider,
             fast: with_params(ModelConfig::new(&config.fast_model), &config.fast_params),
             strong: with_params(ModelConfig::new(&config.strong_model), &config.strong_params),
+            fallback: config.fallback_model.clone().filter(|m| !m.is_empty()),
             timeout: DEFAULT_TURN_TIMEOUT,
         })
     }
@@ -160,13 +162,41 @@ impl Llm {
             max_inferences,
             stop_when,
         } = turn;
+        let stop_when: Option<Arc<dyn Fn(&Conversation) -> bool + Send + Sync>> = stop_when.map(Arc::from);
+        let steer = steer.map(Arc::new);
+        let model = self.model(tier).clone();
+        let run = |model: ModelConfig| {
+            self.run_once(model, &system, &user, tools.clone(), max_inferences, stop_when.clone(), steer.clone(), &on_event)
+        };
+        match (run(model.clone()).await, &self.fallback) {
+            // Only when no model call succeeded, so no tool ran twice.
+            (Err((error, 0)), Some(fallback)) if *fallback != model.model_name => {
+                crate::log::log("llm", crate::log::Kind::Fail, format!("{}: {error:#}; trying {fallback}", model.model_name));
+                let fallback = ModelConfig { model_name: fallback.clone(), ..model };
+                run(fallback).await.map_err(|(e, _)| e)
+            }
+            (result, _) => result.map_err(|(e, _)| e),
+        }
+    }
 
+    /// One attempt at a turn. On failure, also returns how many model calls
+    /// succeeded first.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_once(
+        &self,
+        model: ModelConfig,
+        system: &str,
+        user: &str,
+        tools: Arc<dyn ToolProvider<TurnSession>>,
+        max_inferences: u32,
+        stop_when: Option<Arc<dyn Fn(&Conversation) -> bool + Send + Sync>>,
+        steer: Option<Arc<Steer>>,
+        on_event: &impl Fn(&AgentEvent),
+    ) -> std::result::Result<TurnOutcome, (anyhow::Error, usize)> {
+        let (system, user) = (system.to_string(), user.to_string());
         let cancel = CancellationToken::new();
-        let inference = InferenceRunner::<TurnSession, Effect>::new(
-            self.provider.clone(),
-            self.model(tier).clone(),
-        )
-        .with_request_preparer(Arc::new(SystemPrompt(system)));
+        let inference = InferenceRunner::<TurnSession, Effect>::new(self.provider.clone(), model)
+            .with_request_preparer(Arc::new(SystemPrompt(system)));
 
         let mut steps: Vec<Step<'_, TurnSession, Effect>> = vec![Step::Operation(Arc::new(
             ToolOperation::new().with_provider(tools),
@@ -212,7 +242,8 @@ impl Llm {
             }
         };
         let (session, ()) = tokio::join!(run, drain);
-        let session = session?;
+        let calls = || store.usage.lock().unwrap().len();
+        let session = session.map_err(|e| (e, calls()))?;
 
         let conversation = session.conversation;
         let text = conversation
@@ -223,7 +254,8 @@ impl Llm {
             .map(|m| m.as_concat_text().trim().to_string())
             .unwrap_or_default();
         if let Some(error) = conversation.last().and_then(Message::error_kind) {
-            bail!("model call failed: {error:?}: {}", conversation.last().unwrap().as_concat_text());
+            let error = anyhow::anyhow!("model call failed: {error:?}: {}", conversation.last().unwrap().as_concat_text());
+            return Err((error, calls()));
         }
         let usage = store.usage.into_inner().unwrap();
         MODEL_CALLS.fetch_add(usage.len().max(1), std::sync::atomic::Ordering::Relaxed);
@@ -439,7 +471,7 @@ fn wants_inference(conversation: &Conversation) -> Result<bool> {
 
 /// Our operation: ends the turn as soon as a predicate on the conversation
 /// holds. The planner uses it to stop right after `submit_plan`.
-struct StopWhen(StopPredicate);
+struct StopWhen(Arc<dyn Fn(&Conversation) -> bool + Send + Sync>);
 
 #[async_trait]
 impl Operation<TurnSession, Effect> for StopWhen {
@@ -474,7 +506,7 @@ pub struct Steer {
 
 /// Our operation: hands steering messages to the model mid-turn, so a player
 /// can change the bot's mind without waiting for the turn to end.
-struct SteerIn(Steer);
+struct SteerIn(Arc<Steer>);
 
 #[async_trait]
 impl Operation<TurnSession, Effect> for SteerIn {
