@@ -67,7 +67,8 @@ pub enum BotEvent {
     // From our own thinking task.
     /// `spoke` is true when the model already used `say`; `text` is any
     /// plain-text reply it gave instead.
-    ThoughtDone { decision: Decision, spoke: bool, text: String, tier: Tier, calls: usize },
+    /// `chat` is true when the thought answered someone in chat.
+    ThoughtDone { decision: Decision, spoke: bool, text: String, tier: Tier, calls: usize, chat: bool },
     ThoughtFailed { error: String },
     // From the skill learner and reflection.
     SkillLearned { name: String, skill: Option<crate::memory::Skill>, detail: String, calls: usize, attempts: u32 },
@@ -119,7 +120,11 @@ struct Agent {
     events: mpsc::UnboundedSender<BotEvent>,
     goal: Option<String>,
     thinking: bool,
-    pending: Vec<String>,
+    /// Thoughts waiting for the current one to finish, with the plan they are
+    /// about (if any), so thoughts about a replaced plan can be dropped.
+    pending: Vec<(String, Option<u64>)>,
+    /// The thought being requested answers chat, so plain text may be posted.
+    reply_due: bool,
     pending_tier: Tier,
     failures_in_a_row: u32,
     calls_today: (u64, u32),
@@ -185,6 +190,7 @@ impl Agent {
             goal: None,
             thinking: false,
             pending: Vec::new(),
+            reply_due: false,
             pending_tier: Tier::Fast,
             failures_in_a_row: 0,
             calls_today: (0, 0),
@@ -230,8 +236,12 @@ impl Agent {
             if self.reflex(&event).await {
                 continue;
             }
+            let about = match &event {
+                BotEvent::StepFailed { plan_id, .. } | BotEvent::PlanDone { plan_id } => Some(*plan_id),
+                _ => None,
+            };
             if let Some((text, tier)) = self.needs_thought(&event) {
-                self.request_thought(text, tier);
+                self.request_thought_about(text, tier, about);
             }
         }
     }
@@ -351,12 +361,13 @@ impl Agent {
                 // Someone is talking to us: we may answer, and report on what they asked for.
                 self.body.allow_speech(Duration::from_secs(120));
                 self.goal_for_player = true;
+                self.reply_due = true;
                 self.asked_by = Some(from.clone());
                 let who = if *from_bot { "Your fellow bot" } else { "Player" };
                 Some((format!("{who} {from} says to you: \"{text}\""), Tier::Fast))
             }
-            BotEvent::ThoughtDone { decision, spoke, text, tier, calls } => {
-                self.on_thought(decision.clone(), *spoke, text, *tier, *calls);
+            BotEvent::ThoughtDone { decision, spoke, text, tier, calls, chat } => {
+                self.on_thought(decision.clone(), *spoke, text, *tier, *calls, *chat);
                 None
             }
             BotEvent::ThoughtFailed { error } => {
@@ -456,13 +467,13 @@ impl Agent {
                         self.report(&format!("I learned a new skill: {name}. I must sleep to remember it."));
                         self.note(format!("learned skill {name}"));
                         let sig = self.library.signatures().into_iter().find(|s| s.starts_with(&format!("{name}("))).unwrap_or_default();
-                        self.pending.insert(0, format!("You just learned skill {sig}; it ran once already as a test and is now an action tool. Continue the goal '{}'.", self.goal.clone().unwrap_or_default()));
+                        self.pending.insert(0, (format!("You just learned skill {sig}; it ran once already as a test and is now an action tool. Continue the goal '{}'.", self.goal.clone().unwrap_or_default()), None));
                     }
                     None => {
                         log::log(&self.name, Kind::Fail, format!("could not learn {name} after {attempts} attempts"));
                         self.report(&format!("I couldn't figure out {name}."));
                         self.note(format!("failed to learn {name}"));
-                        self.pending.insert(0, format!("Learning skill {name} failed: {}. Plan with the tools you have, without that skill.", truncate(detail, 300)));
+                        self.pending.insert(0, (format!("Learning skill {name} failed: {}. Plan with the tools you have, without that skill.", truncate(detail, 300)), None));
                     }
                 }
                 self.pending_tier = Tier::Strong;
@@ -515,8 +526,12 @@ impl Agent {
     }
 
     fn request_thought(&mut self, text: String, tier: Tier) {
+        self.request_thought_about(text, tier, None);
+    }
+
+    fn request_thought_about(&mut self, text: String, tier: Tier, about: Option<u64>) {
         if self.thinking || self.dreaming {
-            self.pending.push(text);
+            self.pending.push((text, about));
             if tier == Tier::Strong {
                 self.pending_tier = Tier::Strong;
             }
@@ -565,10 +580,14 @@ impl Agent {
     }
 
     fn flush_pending(&mut self) {
+        // A plan that was replaced while we were thinking needs no more thought.
+        let current = self.executor.plan_id();
+        self.pending.retain(|(_, about)| about.is_none_or(|id| id == current));
         if self.pending.is_empty() {
+            self.pending_tier = Tier::Fast;
             return;
         }
-        let text = std::mem::take(&mut self.pending).join("\nAlso: ");
+        let text = std::mem::take(&mut self.pending).into_iter().map(|(t, _)| t).collect::<Vec<_>>().join("\nAlso: ");
         let tier = std::mem::replace(&mut self.pending_tier, Tier::Fast);
         self.request_thought(text, tier);
     }
@@ -631,6 +650,8 @@ impl Agent {
              - Your memory is saved only when you sleep in a bed at night. If you die, you lose every unsaved skill and lesson.\n\
              - {risk_text}\n\
              - If a step failed, read the error and change the plan; do not repeat the same failing step.\n\
+             - Do what players ask. Your personality shapes how you talk, not whether you help.\n\
+             - A new request from a player replaces whatever you were doing.\n\
              - Learned skills are action tools too; prefer them. When a goal needs a reusable multi-step ability you lack \
              (e.g. gather_wood, make_tools, build_shelter), call learn_skill once, then plan with the new skill.\n\
              - {finish}",
@@ -697,6 +718,7 @@ impl Agent {
 
     /// One GDK turn in a background task. The result comes back as an event.
     fn think(&mut self, event: String, tier: Tier, escalate: bool) {
+        let chat = std::mem::take(&mut self.reply_due);
         let (set, decision) = plan::planning_tools(&self.tools, &tools::SENSE_TOOLS, self.action_names(), escalate);
         let spoke = Arc::new(std::sync::atomic::AtomicBool::new(false));
         {
@@ -743,6 +765,7 @@ impl Agent {
                         text: outcome.text.clone(),
                         tier,
                         calls: outcome.model_calls(),
+                        chat,
                     }
                 }
                 Err(e) => BotEvent::ThoughtFailed { error: format!("{e:#}") },
@@ -751,19 +774,24 @@ impl Agent {
         });
     }
 
-    fn on_thought(&mut self, decision: Decision, spoke: bool, text: &str, _tier: Tier, calls: usize) {
+    fn on_thought(&mut self, decision: Decision, spoke: bool, text: &str, _tier: Tier, calls: usize, chat: bool) {
         self.thinking = false;
         self.calls_today.1 += calls as u32;
         if !spoke && !text.is_empty() {
-            // The model answered in plain text instead of calling say.
-            let _ = self.body.say(&truncate(text, 200));
+            if chat {
+                // The model answered in plain text instead of calling say.
+                let _ = self.body.say(&truncate(text, 200));
+            } else {
+                // Thinking out loud while replanning stays in the console.
+                log::log(&self.name, Kind::Think, truncate(text, 240));
+            }
         }
         let did_say = spoke || !text.is_empty();
         if let Some(goal) = decision.escalate {
             log::log(&self.name, Kind::Plan, format!("new goal: {goal}"));
             self.goal = Some(goal.clone());
             self.note(format!("new goal: {goal}"));
-            self.pending.insert(0, format!("New goal: {goal}. Make a plan."));
+            self.pending.insert(0, (format!("New goal: {goal}. Make a plan."), None));
             self.pending_tier = Tier::Strong;
         } else if let Some(plan) = decision.plan {
             self.start_plan(plan);

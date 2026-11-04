@@ -209,6 +209,7 @@ fn think(
                 text: o.text.clone(),
                 tier: Tier::Fast,
                 calls: o.model_calls(),
+                chat: true,
             },
             Err(e) => BotEvent::ThoughtFailed { error: format!("{e:#}") },
         };
