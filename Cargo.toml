@@ -28,6 +28,7 @@ toml = "1.2.0"
 owo-colors = "4.4.0"
 chrono = "0.4"
 azalea-inventory = "=0.15.1"
+rhai = { version = "1.27", features = ["sync", "serde"] }
 
 [profile.dev]
 opt-level = 1

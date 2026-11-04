@@ -61,6 +61,7 @@ pub struct Llm {
     provider: Arc<dyn Provider>,
     fast: ModelConfig,
     strong: ModelConfig,
+    timeout: std::time::Duration,
 }
 
 impl Llm {
@@ -87,7 +88,13 @@ impl Llm {
             provider,
             fast: ModelConfig::new(&config.fast_model),
             strong: ModelConfig::new(&config.strong_model),
+            timeout: DEFAULT_TURN_TIMEOUT,
         })
+    }
+
+    pub fn with_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 
     /// The same provider with other models, for per-bot model choices.
@@ -164,6 +171,13 @@ impl Llm {
                 on_event(&event);
             }
         };
+        let timeout = self.timeout;
+        let run = async move {
+            match tokio::time::timeout(timeout, run).await {
+                Ok(result) => result,
+                Err(_) => Err(anyhow::anyhow!("model turn took longer than {}s", timeout.as_secs())),
+            }
+        };
         let (session, ()) = tokio::join!(run, drain);
         let session = session?;
 
@@ -206,6 +220,9 @@ pub struct Turn {
     /// Ends the turn early, e.g. once the model has submitted a plan.
     pub stop_when: Option<StopPredicate>,
 }
+
+/// Default wall-clock limit for one turn; see [`Llm::with_timeout`].
+pub const DEFAULT_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
 pub struct TurnOutcome {
     pub conversation: Conversation,

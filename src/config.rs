@@ -95,6 +95,9 @@ pub struct Limits {
     pub skill_write_retries: u32,
     #[serde(default)]
     pub hardcore: bool,
+    /// Gives up on a model turn that takes longer than this.
+    #[serde(default = "default_turn_timeout")]
+    pub turn_timeout_secs: u64,
 }
 
 impl Default for Limits {
@@ -104,6 +107,7 @@ impl Default for Limits {
             inferences_per_turn: default_inferences_per_turn(),
             skill_write_retries: default_skill_retries(),
             hardcore: false,
+            turn_timeout_secs: default_turn_timeout(),
         }
     }
 }
@@ -113,6 +117,9 @@ fn default_calls_per_day() -> u32 {
 }
 fn default_inferences_per_turn() -> u32 {
     6
+}
+fn default_turn_timeout() -> u64 {
+    180
 }
 fn default_skill_retries() -> u32 {
     3

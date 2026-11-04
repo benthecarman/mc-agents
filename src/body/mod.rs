@@ -143,6 +143,11 @@ impl Body {
         self.entities(radius).into_iter().filter(|e| e.hostile).collect()
     }
 
+    pub fn find_block(&self, name: &str, max_distance: i32) -> Option<BlockPos> {
+        let kinds = world::resolve_blocks(name).ok()?;
+        world::nearest_block(&self.client, &kinds, max_distance, &[])
+    }
+
     /// Recent system messages since `since`, newest last.
     pub fn system_messages_since(&self, since: Instant) -> Vec<String> {
         self.senses

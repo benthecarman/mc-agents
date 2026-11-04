@@ -16,6 +16,7 @@
 //! queued and folded into the next one.
 
 pub mod executor;
+pub mod learn;
 pub mod plan;
 pub mod tools;
 
@@ -37,6 +38,7 @@ use crate::{
     config::{BotConfig, Config},
     log::{self, Kind},
     memory::Memory,
+    skills::{self, SkillLibrary},
 };
 
 #[derive(Debug, Clone)]
@@ -61,6 +63,9 @@ pub enum BotEvent {
     /// plain-text reply it gave instead.
     ThoughtDone { decision: Decision, spoke: bool, text: String, tier: Tier, calls: usize },
     ThoughtFailed { error: String },
+    // From the skill learner and reflection.
+    SkillLearned { name: String, skill: Option<crate::memory::Skill>, detail: String, calls: usize, attempts: u32 },
+    Reflected { lessons: Vec<String>, calls: usize },
 }
 
 pub fn start(body: Body, bot: BotConfig, config: Config) -> mpsc::UnboundedSender<BotEvent> {
@@ -84,6 +89,7 @@ struct Agent {
     llm: Llm,
     memory: Memory,
     tools: Arc<ToolSet>,
+    library: Arc<SkillLibrary>,
     executor: Executor,
     events: mpsc::UnboundedSender<BotEvent>,
     goal: Option<String>,
@@ -99,9 +105,29 @@ struct Agent {
 
 impl Agent {
     fn new(body: Body, bot: BotConfig, config: Config, events: mpsc::UnboundedSender<BotEvent>) -> anyhow::Result<Self> {
-        let llm = Llm::from_config(&config.llm)?.with_models(bot.fast_model.as_deref(), bot.strong_model.as_deref());
+        let llm = Llm::from_config(&config.llm)?
+            .with_models(bot.fast_model.as_deref(), bot.strong_model.as_deref())
+            .with_timeout(Duration::from_secs(config.limits.turn_timeout_secs));
         let memory = Memory::open("memory", &bot.name)?;
         let tools = tools::core_tools(body.clone());
+        let library = Arc::new(SkillLibrary::default());
+        for skill in memory.skills() {
+            log::log(&bot.name, Kind::Memory, format!("remembers skill {}{}", skill.name, if skill.saved { "" } else { " (unsaved)" }));
+            library.insert(skill.clone());
+            skills::register(&tools, &library, &body, &skill);
+        }
+        {
+            let library = library.clone();
+            tools.register(crate::brain::tools::ToolDef::new(
+                "list_skills",
+                "List learned skills with their arguments.",
+                serde_json::json!({"type": "object", "properties": {}}),
+                move |_| {
+                    let sigs = library.signatures();
+                    async move { Ok(if sigs.is_empty() { "no skills yet".into() } else { sigs.join("\n") }) }
+                },
+            ));
+        }
         let executor = Executor::new(body.clone(), tools.clone(), events.clone());
         Ok(Self {
             name: bot.name.clone(),
@@ -111,6 +137,7 @@ impl Agent {
             llm,
             memory,
             tools,
+            library,
             executor,
             events,
             goal: None,
@@ -147,7 +174,7 @@ impl Agent {
 
     fn log_event(&self, event: &BotEvent) {
         let text = match event {
-            BotEvent::ThoughtDone { .. } | BotEvent::ThoughtFailed { .. } => return,
+            BotEvent::ThoughtDone { .. } | BotEvent::ThoughtFailed { .. } | BotEvent::SkillLearned { .. } | BotEvent::Reflected { .. } => return,
             BotEvent::Chat { from, text, .. } => format!("chat <{from}> {text}"),
             BotEvent::StepFailed { step, error, .. } => format!("step_failed {step}: {}", truncate(error, 160)),
             BotEvent::PlanDone { .. } => "goal_done".into(),
@@ -297,6 +324,41 @@ impl Agent {
                 None
             }
             BotEvent::Damage { .. } | BotEvent::LowHealth | BotEvent::Hungry => None,
+            BotEvent::SkillLearned { name, skill, detail, calls, attempts } => {
+                self.thinking = false;
+                self.calls_today.1 += *calls as u32;
+                match skill {
+                    Some(skill) => {
+                        if let Err(e) = self.memory.save_working_skill(skill) {
+                            log::log(&self.name, Kind::Fail, format!("saving skill: {e:#}"));
+                        }
+                        self.library.insert(skill.clone());
+                        skills::register(&self.tools, &self.library, &self.body, skill);
+                        log::log(&self.name, Kind::Skill, format!("learned {name} in {attempts} attempt(s); registered as a tool (unsaved until I sleep)"));
+                        let _ = self.body.say(&format!("I learned a new skill: {name}. I must sleep to remember it."));
+                        self.note(format!("learned skill {name}"));
+                        let sig = self.library.signatures().into_iter().find(|s| s.starts_with(&format!("{name}("))).unwrap_or_default();
+                        self.pending.insert(0, format!("You just learned skill {sig}; it ran once already as a test and is now an action tool. Continue the goal '{}'.", self.goal.clone().unwrap_or_default()));
+                    }
+                    None => {
+                        log::log(&self.name, Kind::Fail, format!("could not learn {name} after {attempts} attempts"));
+                        let _ = self.body.say(&format!("I couldn't figure out {name}."));
+                        self.note(format!("failed to learn {name}"));
+                        self.pending.insert(0, format!("Learning skill {name} failed: {}. Plan with the tools you have, without that skill.", truncate(detail, 300)));
+                    }
+                }
+                self.pending_tier = Tier::Strong;
+                self.flush_pending();
+                None
+            }
+            BotEvent::Reflected { lessons, calls } => {
+                self.calls_today.1 += *calls as u32;
+                for lesson in lessons {
+                    log::log(&self.name, Kind::Memory, format!("lesson: {lesson}"));
+                    let _ = self.memory.add_lesson(lesson);
+                }
+                None
+            }
         }
     }
 
@@ -403,6 +465,8 @@ impl Agent {
              - Your memory is saved only when you sleep in a bed at night. If you die, you lose every unsaved skill and lesson.\n\
              - {risk_text}\n\
              - If a step failed, read the error and change the plan; do not repeat the same failing step.\n\
+             - Learned skills are action tools too; prefer them. When a goal needs a reusable multi-step ability you lack \
+             (e.g. gather_wood, make_tools, build_shelter), call learn_skill once, then plan with the new skill.\n\
              - {finish}",
             name = self.name,
             personality = self.bot.personality,
@@ -504,7 +568,8 @@ impl Agent {
             self.executor.resume();
         } else if let Some(request) = decision.learn {
             log::log(&self.name, Kind::Skill, format!("wants to learn {}: {}", request.name, request.description));
-            self.pending.push(format!("You cannot write skills yet. Plan with the action tools for: {}", request.description));
+            self.start_learning(request);
+            return;
         } else if !did_say {
             log::log(&self.name, Kind::Think, "decided nothing");
         }
@@ -527,6 +592,47 @@ impl Agent {
     fn on_goal_done(&mut self, goal: &str) {
         self.goal = None;
         let _ = self.body.say(&format!("Done: {}", truncate(goal, 80)));
+        let llm = self.llm.clone();
+        let body = self.body.clone();
+        let events = self.events.clone();
+        let goal = goal.to_string();
+        let results = self.executor.recent_results();
+        let max = self.config.limits.inferences_per_turn;
+        tokio::spawn(async move {
+            let (lessons, calls) = learn::reflect(&llm, &body, &goal, &results, max).await;
+            let _ = events.send(BotEvent::Reflected { lessons, calls });
+        });
+    }
+
+    /// Hands the body to the skill learner. Thinking stays blocked until the
+    /// learner reports back.
+    fn start_learning(&mut self, request: plan::SkillRequest) {
+        self.thinking = true;
+        self.executor.clear();
+        let learner = learn::Learner {
+            body: self.body.clone(),
+            llm: self.llm.clone(),
+            tools: self.tools.clone(),
+            library: self.library.clone(),
+            retries: self.config.limits.skill_write_retries,
+            inferences_per_turn: self.config.limits.inferences_per_turn,
+        };
+        let events = self.events.clone();
+        tokio::spawn(async move {
+            let name = request.name.clone();
+            let learned = learner.learn(request).await;
+            let (skill, detail) = match learned.result {
+                Ok(skill) => (Some(skill), String::new()),
+                Err(e) => (None, e),
+            };
+            let _ = events.send(BotEvent::SkillLearned {
+                name,
+                skill,
+                detail,
+                calls: learned.calls,
+                attempts: learned.attempts,
+            });
+        });
     }
 }
 
