@@ -35,8 +35,13 @@ impl BotLink {
     }
 }
 
-pub fn spawn(bot: BotConfig, config: Config) -> Result<BotLink> {
+/// Filled in once the bot has joined: its body and its agent's event queue.
+pub type Handle = Arc<std::sync::OnceLock<(Body, mpsc::UnboundedSender<BotEvent>)>>;
+
+pub fn spawn(bot: BotConfig, config: Config) -> Result<(BotLink, Handle)> {
     let (tx, mut rx) = mpsc::unbounded_channel::<(Client, Event)>();
+    let handle: Handle = Arc::default();
+    let ready = handle.clone();
     let bot_names: Vec<String> = config.bots.iter().map(|b| b.name.clone()).collect();
     tokio::spawn(async move {
         let senses = Arc::new(Mutex::new(Senses::default()));
@@ -46,7 +51,9 @@ pub fn spawn(bot: BotConfig, config: Config) -> Result<BotLink> {
         while let Some((client, event)) = rx.recv().await {
             if body.is_none() {
                 let b = Body::new(bot.name.clone(), client.clone(), senses.clone());
-                events = Some(agent::start(b.clone(), bot.clone(), config.clone()));
+                let queue = agent::start(b.clone(), bot.clone(), config.clone());
+                let _ = ready.set((b.clone(), queue.clone()));
+                events = Some(queue);
                 body = Some(b);
             }
             let events = events.as_ref().unwrap();
@@ -106,7 +113,7 @@ pub fn spawn(bot: BotConfig, config: Config) -> Result<BotLink> {
             }
         }
     });
-    Ok(BotLink { tx: Some(tx) })
+    Ok((BotLink { tx: Some(tx) }, handle))
 }
 
 /// `!Ada mine log 3`, `!all look_around`, `!Ada dream`: test commands.

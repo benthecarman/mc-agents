@@ -9,3 +9,7 @@ mc-server/libraries/
 mc-server/versions/
 mc-server/usercache.json
 memory/
+mc-server/console.fifo
+bench/memory/
+bench/results/
+bench/scores.csv

@@ -51,12 +51,32 @@ fn default_kind() -> String {
 pub struct ServerConfig {
     #[serde(default = "default_address")]
     pub address: String,
+    /// Real minutes per Minecraft day. Vanilla is 20; shorter days make the
+    /// demo reach dusk sooner. Needs MC_CONSOLE.
+    #[serde(default = "default_day_minutes")]
+    pub day_minutes: f64,
+    /// Console commands run once when the bots start. Needs MC_CONSOLE.
+    #[serde(default = "default_gamerules")]
+    pub on_start: Vec<String>,
+}
+
+fn default_day_minutes() -> f64 {
+    20.0
+}
+
+fn default_gamerules() -> Vec<String> {
+    vec![
+        "gamerule players_sleeping_percentage 0".into(),
+        "gamerule keep_inventory false".into(),
+    ]
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             address: default_address(),
+            day_minutes: default_day_minutes(),
+            on_start: default_gamerules(),
         }
     }
 }

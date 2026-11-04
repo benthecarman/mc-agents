@@ -14,6 +14,14 @@ strong_model_env = "MAPLE_MODEL"
 
 [server]
 address = "localhost:25565"
+# These need console access: set MC_CONSOLE in .env (see README).
+# Real minutes per Minecraft day (vanilla 20). Shorter = dusk comes sooner.
+day_minutes = 10
+# Run once at startup. One sleeping bot skips the night; death drops items.
+on_start = [
+    "gamerule players_sleeping_percentage 0",
+    "gamerule keep_inventory false",
+]
 
 [limits]
 llm_calls_per_day = 60
