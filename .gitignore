@@ -8,3 +8,4 @@ mc-server/logs/
 mc-server/libraries/
 mc-server/versions/
 mc-server/usercache.json
+memory/

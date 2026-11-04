@@ -44,6 +44,7 @@ pub fn spawn(bot: BotConfig, config: Config) -> Result<BotLink> {
         let senses = Arc::new(Mutex::new(Senses::default()));
         let mut events: Option<mpsc::UnboundedSender<BotEvent>> = None;
         let mut body: Option<Body> = None;
+        let mut last_death = Instant::now() - std::time::Duration::from_secs(60);
         while let Some((client, event)) = rx.recv().await {
             if body.is_none() {
                 let b = Body::new(bot.name.clone(), client.clone(), senses.clone());
@@ -56,7 +57,13 @@ pub fn spawn(bot: BotConfig, config: Config) -> Result<BotLink> {
             };
             match event {
                 Event::Spawn => send(BotEvent::Spawned),
-                Event::Death(_) => send(BotEvent::Death),
+                Event::Death(_) => {
+                    // azalea can report one death twice.
+                    if last_death.elapsed() > std::time::Duration::from_secs(5) {
+                        last_death = Instant::now();
+                        send(BotEvent::Death);
+                    }
+                }
                 Event::Chat(ChatPacket::System(packet)) => {
                     let text = packet.content.to_string();
                     let mut s = senses.lock().unwrap();

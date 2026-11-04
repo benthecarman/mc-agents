@@ -121,6 +121,11 @@ impl Body {
         counts
     }
 
+    pub fn has_food(&self) -> bool {
+        let inv = self.inventory_counts();
+        FOODS.iter().any(|f| inv.contains_key(*f))
+    }
+
     pub fn count(&self, item: &str) -> i32 {
         self.inventory_counts().get(item).copied().unwrap_or(0)
     }
@@ -338,14 +343,19 @@ impl Body {
                 continue;
             }
             mined += 1;
-            // Drops land where the block was; walk over them to pick them up.
+            // Drops land where the block was or fall below it.
             let _ = self.walk_to(pos.center(), 0.5, Duration::from_secs(6)).await;
-            self.client.wait_ticks(6).await;
+            self.collect_drops(8.0).await;
         }
         let gained = diff(&before, &self.inventory_counts());
         let mut result = json!({"mined": mined, "gained": gained});
         if mined > 0 && gained.is_empty() {
-            result["warning"] = json!("blocks broke but nothing was picked up; you may need a better tool (stone and ores need a pickaxe)");
+            let needs_pick = block.contains("stone") || block.contains("ore") || block.contains("deepslate");
+            result["warning"] = json!(if needs_pick {
+                "blocks broke but nothing dropped: stone and ores need a pickaxe"
+            } else {
+                "blocks broke but the drops were not picked up"
+            });
         }
         if mined == 0 {
             return Err(format!(
@@ -357,6 +367,18 @@ impl Body {
             result["problems"] = json!(errors.into_iter().take(2).collect::<Vec<_>>());
         }
         Ok(result.to_string())
+    }
+
+    /// Walks over dropped items near the bot so they get picked up.
+    pub async fn collect_drops(&self, radius: f64) {
+        self.client.wait_ticks(8).await;
+        for _ in 0..4 {
+            let Some(item) = self.entities(radius).into_iter().find(|e| e.kind == "item") else {
+                break;
+            };
+            let _ = self.walk_to(item.pos, 0.5, Duration::from_secs(5)).await;
+            self.client.wait_ticks(6).await;
+        }
     }
 
     /// Puts an item into the hotbar and selects it.
@@ -425,6 +447,48 @@ impl Body {
 
     pub async fn craft(&self, item: &str, n: u32) -> ActionResult {
         let item = strip_ns(item);
+        let mut made_first = Vec::new();
+        if !matches!(item.as_str(), "planks" | "stick") && !item.ends_with("_planks") {
+            if let Some(recipe) = recipes::find(&item).first() {
+                let crafts = ((n.clamp(1, 64) as i32) + recipe.count - 1) / recipe.count;
+                let mut totals = recipe.totals();
+                // Sticks use planks, so make them before topping up planks.
+                totals.sort_by_key(|(ing, _)| !ing.matches("stick"));
+                for (ing, per) in totals {
+                    let want = per * crafts;
+                    let have: i32 = self.inventory_counts().iter().filter(|(k, _)| ing.matches(k)).map(|(_, v)| *v).sum();
+                    if have >= want {
+                        continue;
+                    }
+                    let sub = if ing.matches("oak_planks") {
+                        "planks"
+                    } else if ing.matches("stick") {
+                        "stick"
+                    } else {
+                        continue;
+                    };
+                    if sub == "stick" {
+                        // Sticks need planks too.
+                        let planks: i32 = self.inventory_counts().iter().filter(|(k, _)| k.ends_with("_planks")).map(|(_, v)| *v).sum();
+                        if planks < 2 {
+                            let _ = Box::pin(self.craft("planks", 4)).await;
+                        }
+                    }
+                    if let Ok(r) = Box::pin(self.craft(sub, (want - have) as u32)).await {
+                        made_first.push(r);
+                    }
+                }
+            }
+        }
+        let result = self.craft_one(&item, n).await;
+        match (result, made_first.is_empty()) {
+            (Ok(r), false) => Ok(format!("{r} (first made: {})", made_first.join(", "))),
+            (r, _) => r,
+        }
+    }
+
+    async fn craft_one(&self, item: &str, n: u32) -> ActionResult {
+        let item = item.to_string();
         let n = n.clamp(1, 64) as i32;
         let candidates = recipes::find(&item);
         if candidates.is_empty() {
@@ -587,14 +651,40 @@ impl Body {
                 continue;
             }
             self.client.look_at(e.pos + Vec3::new(0.0, 1.0, 0.0));
-            if !self.client.has_attack_cooldown() {
+            if self.client.attack_cooldown_remaining_ticks() == 0 {
                 self.client.attack(e.entity);
                 hits += 1;
             }
-            self.client.wait_ticks(2).await;
+            self.client.wait_ticks(1).await;
         }
         self.client.stop_pathfinding();
         Ok(format!("hit {} {hits} times", first.kind))
+    }
+
+    pub fn head_in_water(&self) -> bool {
+        self.client
+            .get_component::<azalea::entity::FluidOnEyes>()
+            .is_some_and(|f| format!("{:?}", *f).to_lowercase().contains("water"))
+    }
+
+    /// Gets out of whatever is hurting us without an attacker: swims up when
+    /// underwater, otherwise jumps and steps aside (fire, cactus, a wall).
+    pub async fn escape_hazard(&self) -> ActionResult {
+        self.client.stop_pathfinding();
+        let underwater = self.head_in_water();
+        self.client.set_jumping(true);
+        for _ in 0..60 {
+            self.client.wait_ticks(1).await;
+            if underwater && !self.head_in_water() {
+                break;
+            }
+        }
+        self.client.set_jumping(false);
+        if !underwater {
+            let me = self.position();
+            let _ = self.walk_to(me + Vec3::new(3.0, 0.0, 3.0), 1.5, Duration::from_secs(5)).await;
+        }
+        Ok(if underwater { "swam up for air".into() } else { "jumped clear".into() })
     }
 
     /// Runs away from the nearest hostiles for a few seconds.
@@ -686,6 +776,16 @@ impl SelfId for Client {
         self.minecraft_entity_by_ecs_entity(self.entity)
             .unwrap_or(azalea::world::MinecraftEntityId(0))
     }
+}
+
+/// Distance to the bed we last slept in, or the nearest bed we can see.
+pub fn nearest_bed_distance(body: &Body) -> Option<f64> {
+    let known = body.senses.lock().unwrap().bed;
+    let bed = known.or_else(|| {
+        let beds = world::resolve_blocks("bed").ok()?;
+        world::nearest_block(&body.client, &beds, 128, &[])
+    })?;
+    Some(body.position().distance_to(bed.center()))
 }
 
 pub fn diff(before: &BTreeMap<String, i32>, after: &BTreeMap<String, i32>) -> BTreeMap<String, i32> {
