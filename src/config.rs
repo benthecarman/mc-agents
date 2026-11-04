@@ -41,6 +41,12 @@ pub struct LlmConfig {
     pub fast_model_env: Option<String>,
     #[serde(default)]
     pub strong_model_env: Option<String>,
+    /// Extra fields sent with every request to each tier, for example
+    /// `{ reasoning_effort = "low" }` to make replies faster.
+    #[serde(default)]
+    pub fast_params: std::collections::HashMap<String, toml::Value>,
+    #[serde(default)]
+    pub strong_params: std::collections::HashMap<String, toml::Value>,
 }
 
 fn default_kind() -> String {

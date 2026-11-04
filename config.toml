@@ -11,6 +11,8 @@ fast_model = "glm-5-3-flash"
 strong_model = "glm-5-3-flash"
 fast_model_env = "MAPLE_MODEL"
 strong_model_env = "MAPLE_MODEL"
+# Extra request fields per tier. Low reasoning makes chat replies much faster.
+fast_params = { reasoning_effort = "low" }
 
 [server]
 address = "localhost:25565"

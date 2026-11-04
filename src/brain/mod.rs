@@ -89,12 +89,26 @@ impl Llm {
         };
         Ok(Self {
             provider,
-            fast: ModelConfig::new(&config.fast_model),
-            strong: ModelConfig::new(&config.strong_model),
+            fast: with_params(ModelConfig::new(&config.fast_model), &config.fast_params),
+            strong: with_params(ModelConfig::new(&config.strong_model), &config.strong_params),
             timeout: DEFAULT_TURN_TIMEOUT,
         })
     }
+}
 
+/// Adds `[llm] fast_params` / `strong_params` to every request for a tier.
+fn with_params(model: ModelConfig, params: &std::collections::HashMap<String, toml::Value>) -> ModelConfig {
+    if params.is_empty() {
+        return model;
+    }
+    let params = params
+        .iter()
+        .filter_map(|(k, v)| serde_json::to_value(v).ok().map(|v| (k.clone(), v)))
+        .collect();
+    model.with_merged_request_params(params)
+}
+
+impl Llm {
     pub fn with_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.timeout = timeout;
         self
@@ -103,11 +117,12 @@ impl Llm {
     /// The same provider with other models, for per-bot model choices.
     pub fn with_models(&self, fast: Option<&str>, strong: Option<&str>) -> Self {
         let mut llm = self.clone();
+        // Keep the tier's request params when only the model changes.
         if let Some(fast) = fast {
-            llm.fast = ModelConfig::new(fast);
+            llm.fast = ModelConfig { model_name: fast.to_string(), ..llm.fast.clone() };
         }
         if let Some(strong) = strong {
-            llm.strong = ModelConfig::new(strong);
+            llm.strong = ModelConfig { model_name: strong.to_string(), ..llm.strong.clone() };
         }
         llm
     }
