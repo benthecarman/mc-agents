@@ -130,7 +130,7 @@ impl Agent {
         let llm = Llm::from_config(&config.llm)?
             .with_models(bot.fast_model.as_deref(), bot.strong_model.as_deref())
             .with_timeout(Duration::from_secs(config.limits.turn_timeout_secs));
-        let memory = Memory::open("memory", &bot.name)?;
+        let memory = Memory::open(crate::memory::base_dir(), &bot.name)?;
         let tools = tools::core_tools(body.clone());
         let library = Arc::new(SkillLibrary::default());
         for skill in memory.skills() {
@@ -151,7 +151,7 @@ impl Agent {
             ));
         }
         books::register(&tools, &library, &body, &memory);
-        let nightmares = Nightmares::new("memory", &bot.name);
+        let nightmares = Nightmares::new(crate::memory::base_dir(), &bot.name);
         let executor = Executor::new(body.clone(), tools.clone(), events.clone());
         Ok(Self {
             name: bot.name.clone(),
@@ -932,6 +932,22 @@ impl Agent {
                 }
             }
             "forget" => self.on_death(),
+            "reset" => {
+                // Benchmark: drop the goal and anything in flight, keep memory.
+                for task in self.mind.drain(..) {
+                    task.abort();
+                }
+                self.executor.clear();
+                self.goal = None;
+                self.thinking = false;
+                self.dreaming = false;
+                self.pending.clear();
+                self.recent.clear();
+                self.failures_in_a_row = 0;
+                self.calls_today = (self.body.time().day(), 0);
+                self.budget_warned = false;
+                log::log(&self.name, Kind::Info, "reset");
+            }
             "memory" => {
                 let text = format!("{} | {}", self.memory.long_term_summary(), self.memory.working_summary());
                 log::log(&self.name, Kind::Memory, &text);

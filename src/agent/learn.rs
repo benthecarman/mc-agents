@@ -49,17 +49,23 @@ struct Submission {
     check: Value,
 }
 
-struct WorldState {
-    inventory: BTreeMap<String, i32>,
-    position: azalea::Vec3,
+pub struct WorldState {
+    pub inventory: BTreeMap<String, i32>,
+    pub position: azalea::Vec3,
+}
+
+impl WorldState {
+    pub fn of(body: &Body) -> Self {
+        Self {
+            inventory: body.inventory_counts(),
+            position: body.position(),
+        }
+    }
 }
 
 impl Learner {
     fn state(&self) -> WorldState {
-        WorldState {
-            inventory: self.body.inventory_counts(),
-            position: self.body.position(),
-        }
+        WorldState::of(&self.body)
     }
 
     pub async fn learn(&self, request: SkillRequest) -> Learned {
@@ -245,7 +251,8 @@ impl Learner {
     }
 }
 
-fn verify(check: &Value, before: &WorldState, after: &WorldState, body: &Body) -> Result<(), String> {
+/// Checks a result against `{gain|has: {item: n}, block_within: {block, distance}, near: {x, y, z, distance}}`.
+pub fn verify(check: &Value, before: &WorldState, after: &WorldState, body: &Body) -> Result<(), String> {
     let total = |inv: &BTreeMap<String, i32>, item: &str| -> i32 {
         inv.iter().filter(|(k, _)| item_matches(item, k)).map(|(_, v)| *v).sum()
     };

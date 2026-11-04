@@ -340,6 +340,11 @@ impl Memory {
     }
 }
 
+/// Where bots keep their memory: `MC_MEMORY_DIR`, or `memory/`.
+pub fn base_dir() -> PathBuf {
+    std::env::var_os("MC_MEMORY_DIR").map(PathBuf::from).unwrap_or_else(|| "memory".into())
+}
+
 /// Shared across bots: an append-only list of deaths. Each bot dreams of
 /// the deaths of the others that it has not dreamt of yet.
 pub struct Nightmares {

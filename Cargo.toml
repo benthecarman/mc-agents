@@ -56,3 +56,11 @@ path = "src/bin/gdk_hello.rs"
 [[bin]]
 name = "mc-say"
 path = "src/bin/mc_say.rs"
+
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"
+
+[[bin]]
+name = "improver"
+path = "src/bin/improver.rs"

@@ -15,6 +15,9 @@
 
 pub mod tools;
 
+/// Model calls made by this process, for the benchmark.
+pub static MODEL_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Result};
@@ -193,6 +196,7 @@ impl Llm {
             bail!("model call failed: {error:?}: {}", conversation.last().unwrap().as_concat_text());
         }
         let usage = store.usage.into_inner().unwrap();
+        MODEL_CALLS.fetch_add(usage.len().max(1), std::sync::atomic::Ordering::Relaxed);
         Ok(TurnOutcome {
             conversation,
             text,

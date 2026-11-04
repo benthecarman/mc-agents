@@ -1,0 +1,64 @@
+# Benchmark scenarios, run in order by `cargo run --release --bin bench`.
+#
+# Each scenario runs console commands to set the world up, gives the
+# benchmark bot a goal as if a player said it in chat, then checks the
+# result every two seconds until it passes or the time runs out. Checks use
+# the same format as skill tests: gain / has {item = n}, block_within
+# {block, distance}, near {x, y, z, distance}.
+#
+# Coordinates are for the demo world. Pick a spot with trees, open ground
+# and exposed stone, and change `origin` commands to match your world.
+# {bot} is replaced with the bot's name.
+
+bot = "Bench"
+personality = "Efficient worker. Does exactly what it is asked, quickly."
+setup = ["difficulty peaceful", "weather clear", "gamerule keep_inventory false"]
+teardown = ["difficulty easy"]
+# Remove what earlier runs built near the start, so checks start fresh.
+cleanup = [
+    "fill 200 60 226 226 76 254 air replace minecraft:crafting_table",
+    "fill 200 60 226 226 76 254 air replace #minecraft:beds",
+    "fill 200 60 226 226 76 254 air replace minecraft:furnace",
+]
+
+[[scenario]]
+name = "wood"
+goal = "get 4 logs."
+commands = ["clear {bot}", "tp {bot} 212 64 240", "time set 1000"]
+timeout_secs = 150
+check = { gain = { log = 4 } }
+
+[[scenario]]
+name = "crafting_table"
+goal = "make a crafting table and place it next to you."
+commands = ["clear {bot}", "tp {bot} 212 64 240", "time set 1000", "give {bot} oak_log 2"]
+timeout_secs = 150
+check = { block_within = { block = "crafting_table", distance = 8 } }
+
+[[scenario]]
+name = "wooden_pickaxe"
+goal = "craft a wooden pickaxe."
+commands = ["clear {bot}", "tp {bot} 212 64 240", "time set 1000", "give {bot} oak_log 3"]
+timeout_secs = 180
+check = { has = { wooden_pickaxe = 1 } }
+
+[[scenario]]
+name = "cobblestone"
+goal = "mine 3 cobblestone."
+commands = ["clear {bot}", "tp {bot} 226 57 253", "time set 1000", "give {bot} wooden_pickaxe 1"]
+timeout_secs = 150
+check = { gain = { cobblestone = 3 } }
+
+[[scenario]]
+name = "tools_from_scratch"
+goal = "you have nothing. Get wood and make a wooden pickaxe."
+commands = ["clear {bot}", "tp {bot} 212 64 240", "time set 1000"]
+timeout_secs = 300
+check = { has = { wooden_pickaxe = 1 } }
+
+[[scenario]]
+name = "sleep"
+goal = "it is getting dark. Place your bed and sleep through the night."
+commands = ["clear {bot}", "tp {bot} 212 64 240", "time set 12300", "give {bot} white_bed 1"]
+timeout_secs = 150
+check = { day = true }
