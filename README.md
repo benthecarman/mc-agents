@@ -37,24 +37,35 @@ sleeping, and forget what they did not save when they die.
 
 Logs are in color on the console and as plain text in `logs/all.log` and
 `logs/<bot>.log`. Each bot's memory is in `memory/<bot>/`. Use
-`git -C memory/Ada log -p` to read what Ada learned each night.
+`git -C memory/Haley log -p` to read what Haley learned each night.
+
+## The bots
+
+`config.toml` has one bot for each person on the
+[Spiral team](https://spiral.xyz/team/), with a personality and a risk
+appetite drawn from their entry on that page, plus Zeus, the god. Delete or
+add `[[bots]]` entries to change who joins. Bots join 1.5 s apart, so all 22
+take about half a minute. If a teammate joins the server with the same name
+as a bot, one of the two gets kicked, so use another name for yourself (for
+example `benthecarman`).
 
 ## Talking to the bots
 
-- Say something with a bot's name in it: `Ada, make a wooden pickaxe`. If you
-  name no bot, the first bot in `config.toml` answers. Use `all` to talk to
+- Say something with a bot's name in it (a whole word, so `Mat` and `Matt`
+  are different bots): `Haley, make a wooden pickaxe`. If you
+  name no bot, the first worker in `config.toml` (Steve) answers. Use `all` to talk to
   every bot.
-- `Ada, come here` works: bots have `where_is(player)` and
+- `Haley, come here` works: bots have `where_is(player)` and
   `go_to_player(player)`. They can see any player in the area that any of
   the bots has loaded (about 150 blocks around each bot).
 - A message that starts with a bot's name (`Zeus, ...` or `@Zeus ...`) is
   for that bot only, even if it names others.
 - Test commands skip the model:
-  - `!Ada mine log 3` and `!all look_around` run a tool directly.
-  - `!Ada memory` shows saved and unsaved memory.
-  - `!Ada dream` consolidates memory now, without a bed.
-  - `!Ada forget` acts out a death for memory: unsaved skills are lost.
-  - `!Ada reset` drops the current goal.
+  - `!Haley mine log 3` and `!all look_around` run a tool directly.
+  - `!Haley memory` shows saved and unsaved memory.
+  - `!Haley dream` consolidates memory now, without a bed.
+  - `!Haley forget` acts out a death for memory: unsaved skills are lost.
+  - `!Haley reset` drops the current goal.
 
 ## The god bot
 
@@ -63,8 +74,8 @@ the world. It is in creative mode and rules the world through the server
 console, so it needs `MC_CONSOLE`. Call it by name:
 
 - `Zeus, make it thunder` / `Zeus, make it night`
-- `Zeus, teleport me to Rex` / `Zeus, give Ada a bed`
-- `@Zeus smite Rex` (lightning, for those who deserve it)
+- `Zeus, teleport me to Jasper` / `Zeus, give Haley a bed`
+- `@Zeus smite Jasper` (lightning, for those who deserve it)
 
 It also acts unasked every `limits.god_whim_secs` (0 turns this off). Its
 powers are `set_weather`, `set_time`, `smite`, `teleport`, `give` and
@@ -136,27 +147,27 @@ azalea events ─► runtime ─► BotEvent queue ─► agent loop
 Before the demo, set `server.day_minutes` to about 6 so that dusk comes
 sooner. Start the server and `cargo run --release`, then join the game.
 
-1. **A multi-step task.** Say `Ada, make a wooden pickaxe`. Watch the
-   console: Ada sets a goal, plans (logs → planks → sticks → crafting table →
+1. **A multi-step task.** Say `Haley, make a wooden pickaxe`. Watch the
+   console: Haley sets a goal, plans (logs → planks → sticks → crafting table →
    pickaxe), runs the plan and replans when a step fails.
-2. **Skill writing.** Say `Rex, learn a skill to gather wood, then get 8
+2. **Skill writing.** Say `Jasper, learn a skill to gather wood, then get 8
    logs`. The console shows the Rhai code, the test run and the check. In
-   chat, Rex says: "I learned a new skill: gather_wood. I must sleep to
-   remember it." `!Rex memory` lists it as unsaved.
-3. **Night, far from home.** Give Rex a bed (`/give Rex white_bed`), send
-   him away (`Rex, go mine coal`), and type `/time set 12000`. At dusk each
-   bot says whether it races back or pushes on. Careful Ada (risk 0.2) goes
-   to bed. Greedy Rex (risk 0.8) pushes on if the goal is close.
+   chat, Jasper says: "I learned a new skill: gather_wood. I must sleep to
+   remember it." `!Jasper memory` lists it as unsaved.
+3. **Night, far from home.** Give Jasper a bed (`/give Jasper white_bed`), send
+   Jasper away (`Jasper, go mine coal`), and type `/time set 12000`. At dusk each
+   bot says whether it races back or pushes on. Careful Haley (risk 0.2) goes
+   to bed. Jasper (risk 0.95), who flaunts safety protocols, pushes on.
 4. **The dream journal.** When a bot sleeps, the console prints its dream
    journal (tagged `dream`), and chat shows "Dreamt: ...". Show the commit:
-   `git -C memory/Rex log -1 -p`.
+   `git -C memory/Jasper log -1 -p`.
 5. **Death with unsaved skills.** Teach a bot another skill, then kill it
-   before it sleeps (`/kill Rex`). Chat shows "I died and forgot 1 skill(s)
-   (...)". `!Rex memory` shows that the saved skills are still there and the
+   before it sleeps (`/kill Jasper`). Chat shows "I died and forgot 1 skill(s)
+   (...)". `!Jasper memory` shows that the saved skills are still there and the
    new one is gone. The other bots dream about the death the next night.
-6. **Inheritance (optional).** `/give Ada writable_book` and a chest. Say
-   `!Ada place chest <x> <y> <z>` and `!Ada write_book all`. Then
-   `!Rex read_book`: Rex gets Ada's skills and rules, unsaved.
+6. **Inheritance (optional).** `/give Haley writable_book` and a chest. Say
+   `!Haley place chest <x> <y> <z>` and `!Haley write_book all`. Then
+   `!Jasper read_book`: Jasper gets Haley's skills and rules, unsaved.
 
 ## Benchmark and improver
 
@@ -223,6 +234,6 @@ renamed trait import (`TryRngCore` → `TryRng`).
 
 - `cargo run --bin gdk-hello` runs one GDK turn with one custom tool and
   canned data. It needs no Minecraft server. Use it to check the model setup.
-- `cargo run --bin mc-say -- "Ada, hello" "!Ada memory"` joins as `Tester`,
+- `cargo run --bin mc-say -- "Haley, hello" "!Haley memory"` joins as `Tester`,
   says each line, and prints the chat that follows. It is for tests without a
   game client.

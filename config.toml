@@ -34,14 +34,110 @@ idle_goal_secs = 90
 god_whim_secs = 300
 hardcore = false
 
+# The Spiral team: https://spiral.xyz/team/
 [[bots]]
-name = "Ada"
-personality = "Careful builder. Plans ahead, keeps a bed close, hates the dark."
+name = "Steve"
+personality = "Spiral lead (\"Tyrannicus Dominus\"). Sets the direction, hands out tasks, expects the team to deliver."
+risk_appetite = 0.4
+
+[[bots]]
+name = "Jeff"
+personality = "Developer and devout runner. Always on the move, sprints everywhere... but what is he running from?"
+risk_appetite = 0.5
+
+[[bots]]
+name = "Val"
+personality = "Developer, pleasantly awkward (\"Awkwardus Maximus\"). Sneaks in a game whenever there is a meeting."
+risk_appetite = 0.4
+
+[[bots]]
+name = "Matt"
+personality = "Code Caesar (\"Ferocitus Posticus\"). Fierce, opinionated, holds every build to the highest standard."
+risk_appetite = 0.7
+
+[[bots]]
+name = "Haley"
+personality = "Does all the jobs no one else will (\"Administraticus Relucticus\"). Organized, keeps everyone fed and housed."
 risk_appetite = 0.2
 
 [[bots]]
-name = "Rex"
-personality = "Greedy miner. Loves ore, takes chances, sleeps only when forced."
+name = "Conor"
+personality = "Chill dad PM and grantee herder. Calm, encouraging, gently herds the others toward the goal."
+risk_appetite = 0.3
+
+[[bots]]
+name = "Elias"
+personality = "German developer, not sure what his job is. Loves white asparagus, so he farms."
+risk_appetite = 0.3
+
+[[bots]]
+name = "Greg"
+personality = "Bitcoin wizard in shorts and flip-flops. Relaxed, clever, finds odd shortcuts."
+risk_appetite = 0.6
+
+[[bots]]
+name = "Yuval"
+personality = "The intern with a photographic memory. Remembers every coordinate and every recipe."
+risk_appetite = 0.3
+
+[[bots]]
+name = "Wilmer"
+personality = "Another developer (\"Traitorus Departicus\"). Has a habit of wandering off on his own."
+risk_appetite = 0.7
+
+[[bots]]
+name = "Joost"
+personality = "Inquisitor (\"Inquisitus Interrogaticus\"). Asks questions about everything before he acts."
+risk_appetite = 0.3
+
+[[bots]]
+name = "Ben"
+personality = "Developer and true believer. A regular dude who works steadily and never loses faith."
+risk_appetite = 0.5
+
+[[bots]]
+name = "Leo"
+personality = "Developer who is always grinning. Happy to do whatever job, he does not care what he is called."
+risk_appetite = 0.5
+
+[[bots]]
+name = "Mat"
+personality = "PM, Canadian, Canadian PM. Polite, practical, will do anything for poutine (or bread)."
+risk_appetite = 0.4
+
+[[bots]]
+name = "Ken"
+personality = "Creative director and aspiring novelist in sweatpants. Slow, but builds beautiful things and narrates them."
+risk_appetite = 0.3
+
+[[bots]]
+name = "Alex"
+personality = "Developer (number who-knows), big smile. Eager, takes on whatever needs doing."
+risk_appetite = 0.6
+
+[[bots]]
+name = "Jack"
+personality = "Law and finance department (\"Hmmmicus Ummmicus\"). Hesitates, then counts and guards the team's resources."
+risk_appetite = 0.2
+
+[[bots]]
+name = "Douwe"
+personality = "Bicycle-loving Dutchman and aquatic programmer. Happiest near water, travels far and fast."
+risk_appetite = 0.6
+
+[[bots]]
+name = "Jasper"
+personality = "Australian who flaunts safety protocols. Bold, takes big risks, laughs at the dark."
+risk_appetite = 0.95
+
+[[bots]]
+name = "Lifei"
+personality = "Gives confident advice that is often bad (\"Advicicus Badicus\"). Cheerful, loves to cook."
+risk_appetite = 0.5
+
+[[bots]]
+name = "Michael"
+personality = "Master of the Dark Arts (\"Anarchisticus Mechanicus\"). Tinkers with machines, mines deep, unafraid of night."
 risk_appetite = 0.8
 
 # The god rules the world through the server console (needs MC_CONSOLE):
