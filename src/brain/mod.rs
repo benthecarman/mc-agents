@@ -251,7 +251,7 @@ impl Llm {
             .iter()
             .rev()
             .find(|m| m.role == rmcp::model::Role::Assistant && !m.as_concat_text().trim().is_empty())
-            .map(|m| m.as_concat_text().trim().to_string())
+            .map(|m| strip_safety_tags(&m.as_concat_text()))
             .unwrap_or_default();
         if let Some(error) = conversation.last().and_then(Message::error_kind) {
             let error = anyhow::anyhow!("model call failed: {error:?}: {}", conversation.last().unwrap().as_concat_text());
@@ -265,6 +265,12 @@ impl Llm {
             usage,
         })
     }
+}
+
+/// DeepSeek models sometimes append a `<ds_safety>` classification to
+/// their text; it must never reach chat.
+fn strip_safety_tags(text: &str) -> String {
+    text.split("<ds_safety>").next().unwrap_or_default().trim().to_string()
 }
 
 fn uuid_like() -> String {
