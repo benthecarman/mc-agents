@@ -21,7 +21,7 @@ use azalea::{
     BlockPos, Client, Vec3,
 };
 use azalea_inventory::{
-    operations::{ClickOperation, PickupClick, SwapClick},
+    operations::{ClickOperation, PickupClick, SwapClick, ThrowClick},
     ItemStack, Menu,
 };
 use serde_json::json;
@@ -384,6 +384,54 @@ impl Body {
         }
         self.walk_to(target, 2.5, Duration::from_secs_f64(15.0 + distance * 0.6)).await?;
         Ok(format!("reached {player} at {} {} {}", target.x.floor(), target.y.floor(), target.z.floor()))
+    }
+
+    /// Walks to a player and tosses them `n` of an item (a name or a group
+    /// such as `log`).
+    pub async fn give_to(&self, player: &str, item: &str, n: u32) -> ActionResult {
+        let item = strip_ns(item);
+        let n = n.clamp(1, 36 * 64) as i32;
+        let matches = |name: &str| crate::skills::item_matches(&item, name);
+        let have: i32 = self.inventory_counts().iter().filter(|(k, _)| matches(k)).map(|(_, v)| *v).sum();
+        if have == 0 {
+            return Err(format!("I have no {item} to give"));
+        }
+        self.go_to_player(player).await?;
+        let found: serde_json::Value = serde_json::from_str(&self.where_is(player)?).map_err(|e| e.to_string())?;
+        let p = &found["position"];
+        let target = Vec3::new(
+            p[0].as_f64().unwrap_or(0.0) + 0.5,
+            p[1].as_f64().unwrap_or(0.0) + 1.0,
+            p[2].as_f64().unwrap_or(0.0) + 0.5,
+        );
+        self.client.look_at(target);
+        self.client.wait_ticks(2).await;
+        let mut left = n.min(have);
+        let mut given = 0;
+        for slot in 9..=44usize {
+            if left == 0 {
+                break;
+            }
+            let slots = self.inventory_menu().slots();
+            let Some((name, count)) = item_name(&slots[slot]) else { continue };
+            if !matches(&name) {
+                continue;
+            }
+            let inventory = self.client.get_inventory();
+            if count <= left {
+                inventory.click(ThrowClick::All { slot: slot as u16 });
+                left -= count;
+                given += count;
+            } else {
+                for _ in 0..left {
+                    inventory.click(ThrowClick::Single { slot: slot as u16 });
+                }
+                given += left;
+                left = 0;
+            }
+            self.client.wait_ticks(2).await;
+        }
+        Ok(json!({"gave": given, "item": item, "to": player, "short_by": (n - given).max(0)}).to_string())
     }
 
     /// Mines up to `n` of the nearest blocks matching `block` and picks up

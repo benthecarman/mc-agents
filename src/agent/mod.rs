@@ -475,6 +475,10 @@ impl Agent {
         if text.starts_with(DEBUG_TAG) {
             return false;
         }
+        // Bots talk only to people, never to each other.
+        if from_bot {
+            return false;
+        }
         let lower = text.to_lowercase();
         // "Zeus, take me to Rex" or "@Zeus ..." is for Zeus alone.
         let opening = lower.trim_start().trim_start_matches('@');
@@ -483,10 +487,6 @@ impl Agent {
             opening.starts_with(&name) && !opening[name.len()..].starts_with(|c: char| c.is_alphanumeric())
         }) {
             return first.name == self.name;
-        }
-        // Bots talk only to people, never to each other.
-        if from_bot {
-            return false;
         }
         let mentions_me = names(&lower, &self.name);
         let everyone = ["all", "everyone", "bots", "everybody"]

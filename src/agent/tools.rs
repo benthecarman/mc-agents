@@ -41,6 +41,7 @@ pub fn positional(tool: &str) -> &'static [&'static str] {
         "goto" => &["x", "y", "z"],
         "follow" => &["player", "seconds"],
         "where_is" | "go_to_player" => &["player"],
+        "give" => &["player", "item", "count"],
         "mine" => &["block", "count"],
         "place" => &["block", "x", "y", "z"],
         "craft" | "smelt" => &["item", "count"],
@@ -97,6 +98,16 @@ pub fn register_core(set: &ToolSet, body: Body) {
         "Walk to where a player is now. Use for \"come here\".",
         object_schema(&[("player", "string", "Player name")]),
         |b, a| b.go_to_player(&text(&a, "player")?).await
+    );
+    tool!(
+        "give",
+        "Walk to a player and toss them items from your inventory. Item may be a name or a group (log, planks).",
+        object_schema(&[
+            ("player", "string", "Player name"),
+            ("item", "string", "Item name or group"),
+            ("count", "integer", "How many, 1-64"),
+        ]),
+        |b, a| b.give_to(&text(&a, "player")?, &text(&a, "item")?, int_or(&a, "count", 1) as u32).await
     );
     tool!(
         "mine",
