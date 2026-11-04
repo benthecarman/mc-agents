@@ -2543,6 +2543,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "azalea",
+ "azalea-inventory",
  "chrono",
  "futures",
  "goose-agent",

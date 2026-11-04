@@ -1,3 +1,5 @@
+pub mod agent;
+pub mod body;
 pub mod brain;
 pub mod config;
 pub mod log;

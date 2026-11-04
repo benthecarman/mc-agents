@@ -1,10 +1,24 @@
-//! One bot's runtime: receives azalea events and decides what to do.
+//! One bot's runtime: receives azalea events, keeps the body's senses up to
+//! date, and hands everything else to the agent loop.
+
+use std::{
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
 use anyhow::Result;
-use azalea::{prelude::*, Client};
+use azalea::{
+    chat::ChatPacket,
+    prelude::*,
+    protocol::packets::game::ClientboundGamePacket,
+    Client,
+};
 use tokio::sync::mpsc;
 
 use crate::{
+    agent::{self, tools, BotEvent},
+    body::{Body, Senses},
+    brain::truncate,
     config::{BotConfig, Config},
     log::{self, Kind},
 };
@@ -27,21 +41,87 @@ pub fn spawn(bot: BotConfig, config: Config) -> Result<BotLink> {
     let (tx, mut rx) = mpsc::unbounded_channel::<(Client, Event)>();
     let bot_names: Vec<String> = config.bots.iter().map(|b| b.name.clone()).collect();
     tokio::spawn(async move {
+        let senses = Arc::new(Mutex::new(Senses::default()));
+        let mut events: Option<mpsc::UnboundedSender<BotEvent>> = None;
+        let mut body: Option<Body> = None;
         while let Some((client, event)) = rx.recv().await {
+            if body.is_none() {
+                let b = Body::new(bot.name.clone(), client.clone(), senses.clone());
+                events = Some(agent::start(b.clone(), bot.clone(), config.clone()));
+                body = Some(b);
+            }
+            let (body, events) = (body.as_ref().unwrap(), events.as_ref().unwrap());
+            let send = |e: BotEvent| {
+                let _ = events.send(e);
+            };
             match event {
-                Event::Spawn => log::log(&bot.name, Kind::Event, "spawned"),
+                Event::Spawn => send(BotEvent::Spawned),
+                Event::Death(_) => send(BotEvent::Death),
+                Event::Chat(ChatPacket::System(packet)) => {
+                    let text = packet.content.to_string();
+                    let mut s = senses.lock().unwrap();
+                    s.system_messages.push_back((Instant::now(), text));
+                    while s.system_messages.len() > 20 {
+                        s.system_messages.pop_front();
+                    }
+                }
                 Event::Chat(chat) => {
                     let (sender, content) = chat.split_sender_and_content();
                     let Some(sender) = sender else { continue };
-                    if bot_names.contains(&sender) {
+                    if sender == bot.name {
                         continue;
                     }
-                    log::log(&bot.name, Kind::Chat, format!("<{sender}> {content}"));
-                    client.chat(format!("{sender} said: {content}"));
+                    if let Some(command) = debug_command(&bot.name, &content) {
+                        run_debug_command(body.clone(), command);
+                        continue;
+                    }
+                    let from_bot = bot_names.contains(&sender);
+                    send(BotEvent::Chat {
+                        from: sender,
+                        text: content,
+                        from_bot,
+                    });
                 }
+                Event::Packet(packet) => match &*packet {
+                    ClientboundGamePacket::SetTime(p) => senses.lock().unwrap().day_time = p.day_time,
+                    ClientboundGamePacket::DamageEvent(p) => {
+                        let me = client.minecraft_entity_by_ecs_entity(client.entity);
+                        if Some(p.entity_id) == me {
+                            if let Some(source) = p.source_cause_id.0 {
+                                senses.lock().unwrap().last_attacker = Some((source, Instant::now()));
+                            }
+                            send(BotEvent::Damage {
+                                attacker: p.source_cause_id.0,
+                            });
+                        }
+                    }
+                    _ => {}
+                },
                 _ => {}
             }
         }
     });
     Ok(BotLink { tx: Some(tx) })
+}
+
+/// `!Ada mine log 3` or `!all look_around` runs a tool directly. For testing.
+fn debug_command(name: &str, content: &str) -> Option<String> {
+    let rest = content.strip_prefix('!')?;
+    let (target, command) = rest.split_once(' ')?;
+    (target.eq_ignore_ascii_case(name) || target == "all").then(|| command.trim().to_string())
+}
+
+fn run_debug_command(body: Body, command: String) {
+    tokio::spawn(async move {
+        let Some((tool, args)) = tools::parse_command(&command) else { return };
+        let set = tools::core_tools(body.clone());
+        log::log(&body.name, Kind::Tool, format!("debug {tool}({args})"));
+        let result = set.call(&tool, args).await;
+        let (kind, text) = match &result {
+            Ok(t) => (Kind::Result, t.clone()),
+            Err(e) => (Kind::Fail, e.clone()),
+        };
+        log::log(&body.name, kind, &text);
+        let _ = body.say(&truncate(&text, 230));
+    });
 }
