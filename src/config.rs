@@ -71,6 +71,14 @@ fn default_gamerules() -> Vec<String> {
     ]
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    #[default]
+    Worker,
+    God,
+}
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
@@ -88,6 +96,10 @@ fn default_address() -> String {
 #[derive(Debug, Clone, Deserialize)]
 pub struct BotConfig {
     pub name: String,
+    /// `worker` (default) lives in the world; `god` runs the world through
+    /// the server console: weather, time, lightning, teleports, gifts.
+    #[serde(default)]
+    pub role: Role,
     #[serde(default)]
     pub personality: String,
     /// 0.0 = races home at the first sign of dusk, 1.0 = pushes on into the night.
@@ -121,6 +133,9 @@ pub struct Limits {
     /// A bot with no goal for this many seconds picks its own. 0 = never.
     #[serde(default = "default_idle_goal")]
     pub idle_goal_secs: u64,
+    /// A god bot acts on a whim this often, unasked. 0 = only when called.
+    #[serde(default = "default_god_whim")]
+    pub god_whim_secs: u64,
 }
 
 impl Default for Limits {
@@ -132,6 +147,7 @@ impl Default for Limits {
             hardcore: false,
             turn_timeout_secs: default_turn_timeout(),
             idle_goal_secs: default_idle_goal(),
+            god_whim_secs: default_god_whim(),
         }
     }
 }
@@ -141,6 +157,9 @@ fn default_calls_per_day() -> u32 {
 }
 fn default_inferences_per_turn() -> u32 {
     6
+}
+fn default_god_whim() -> u64 {
+    300
 }
 fn default_idle_goal() -> u64 {
     90

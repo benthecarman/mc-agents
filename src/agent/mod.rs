@@ -20,6 +20,7 @@ const DEBUG_TAG: &str = "[debug]";
 
 pub mod books;
 pub mod dream;
+pub mod god;
 pub mod executor;
 pub mod learn;
 pub mod plan;
@@ -80,6 +81,10 @@ pub enum BotEvent {
 
 pub fn start(body: Body, bot: BotConfig, config: Config) -> mpsc::UnboundedSender<BotEvent> {
     let (tx, rx) = mpsc::unbounded_channel();
+    if bot.role == crate::config::Role::God {
+        tokio::spawn(god::run(body, bot, config, tx.clone(), rx));
+        return tx;
+    }
     let agent = match Agent::new(body, bot.clone(), config, tx.clone()) {
         Ok(agent) => agent,
         Err(e) => {
@@ -451,6 +456,14 @@ impl Agent {
             return false;
         }
         let lower = text.to_lowercase();
+        // "Zeus, take me to Rex" or "@Zeus ..." is for Zeus alone.
+        let opening = lower.trim_start().trim_start_matches('@');
+        if let Some(first) = self.config.bots.iter().find(|b| {
+            let name = b.name.to_lowercase();
+            opening.starts_with(&name) && !opening[name.len()..].starts_with(|c: char| c.is_alphanumeric())
+        }) {
+            return first.name == self.name;
+        }
         let mentions_me = lower.contains(&self.name.to_lowercase());
         if from_bot {
             return mentions_me;
@@ -459,7 +472,9 @@ impl Agent {
         let everyone = ["all", "everyone", "bots", "everybody"]
             .iter()
             .any(|w| lower.split(|c: char| !c.is_alphanumeric()).any(|t| t == *w));
-        mentions_me || everyone || (!any_bot && self.config.bots.first().is_some_and(|b| b.name == self.name))
+        // Chat that names no bot goes to the first worker.
+        let first_worker = self.config.bots.iter().find(|b| b.role == crate::config::Role::Worker);
+        mentions_me || everyone || (!any_bot && first_worker.is_some_and(|b| b.name == self.name))
     }
 
     fn request_thought(&mut self, text: String, tier: Tier) {

@@ -99,6 +99,7 @@ async fn run() -> Result<()> {
         name: suite.bot.clone(),
         personality: suite.personality.clone(),
         risk_appetite: 0.5,
+        role: Default::default(),
         fast_model: None,
         strong_model: None,
     }];

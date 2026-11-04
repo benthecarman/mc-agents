@@ -44,12 +44,34 @@ Logs are in color on the console and as plain text in `logs/all.log` and
 - Say something with a bot's name in it: `Ada, make a wooden pickaxe`. If you
   name no bot, the first bot in `config.toml` answers. Use `all` to talk to
   every bot.
+- `Ada, come here` works: bots have `where_is(player)` and
+  `go_to_player(player)`. They can see any player in the area that any of
+  the bots has loaded (about 150 blocks around each bot).
+- A message that starts with a bot's name (`Zeus, ...` or `@Zeus ...`) is
+  for that bot only, even if it names others.
 - Test commands skip the model:
   - `!Ada mine log 3` and `!all look_around` run a tool directly.
   - `!Ada memory` shows saved and unsaved memory.
   - `!Ada dream` consolidates memory now, without a bed.
   - `!Ada forget` acts out a death for memory: unsaved skills are lost.
   - `!Ada reset` drops the current goal.
+
+## The god bot
+
+A bot with `role = "god"` in `config.toml` (Zeus by default) does not live in
+the world. It is in creative mode and rules the world through the server
+console, so it needs `MC_CONSOLE`. Call it by name:
+
+- `Zeus, make it thunder` / `Zeus, make it night`
+- `Zeus, teleport me to Rex` / `Zeus, give Ada a bed`
+- `@Zeus smite Rex` (lightning, for those who deserve it)
+
+It also acts unasked every `limits.god_whim_secs` (0 turns this off). Its
+powers are `set_weather`, `set_time`, `smite`, `teleport`, `give` and
+`players`. Each one fills a fixed command template, and its arguments are
+checked: players must be online, and items and coordinates must be valid.
+The model never writes a console command. The god uses the same daily
+model-call budget as the other bots.
 
 ## How it works
 
@@ -186,6 +208,7 @@ or run more generations.
   read-only). It has no general shell.
 - There are caps on model calls per bot per in-game day, on model calls per
   turn, on turn time, and on skill-write retries.
+- The god bot can run only its fixed command templates.
 - Use a local test server only.
 
 ## Dependency note

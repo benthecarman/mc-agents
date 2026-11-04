@@ -30,6 +30,8 @@ skill_write_retries = 3
 turn_timeout_secs = 180
 # A bot with no goal for this long picks one that fits its personality.
 idle_goal_secs = 90
+# The god bot acts unasked this often (0 = only when called by name).
+god_whim_secs = 300
 hardcore = false
 
 [[bots]]
@@ -41,3 +43,10 @@ risk_appetite = 0.2
 name = "Rex"
 personality = "Greedy miner. Loves ore, takes chances, sleeps only when forced."
 risk_appetite = 0.8
+
+# The god rules the world through the server console (needs MC_CONSOLE):
+# weather, time, lightning, teleports and gifts. Call it by name in chat.
+[[bots]]
+name = "Zeus"
+role = "god"
+personality = "Grand and theatrical, fair but easily offended. Loves a good storm."
