@@ -1,0 +1,31 @@
+# mc-agents configuration. Secrets do not go here: name the environment
+# variable that holds a key in `api_key_env` and put the key in `.env`.
+
+[llm]
+# "openai" = any OpenAI-compatible endpoint, "anthropic" = Anthropic API.
+kind = "openai"
+base_url = "http://127.0.0.1:8888"
+base_url_env = "MAPLE_BASE_URL"
+# api_key_env = "OPENAI_API_KEY"
+fast_model = "glm-5-3-flash"
+strong_model = "glm-5-3"
+fast_model_env = "MAPLE_MODEL"
+
+[server]
+address = "localhost:25565"
+
+[limits]
+llm_calls_per_day = 60
+inferences_per_turn = 6
+skill_write_retries = 3
+hardcore = false
+
+[[bots]]
+name = "Ada"
+personality = "Careful builder. Plans ahead, keeps a bed close, hates the dark."
+risk_appetite = 0.2
+
+[[bots]]
+name = "Rex"
+personality = "Greedy miner. Loves ore, takes chances, sleeps only when forced."
+risk_appetite = 0.8

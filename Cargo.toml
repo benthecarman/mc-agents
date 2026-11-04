@@ -1,0 +1,53 @@
+[package]
+name = "mc-agents"
+version = "0.1.0"
+edition = "2021"
+description = "Self-improving Minecraft bots: azalea body, goose GDK brain, Rhai skills"
+default-run = "mc-agents"
+
+[dependencies]
+# Bot body. 0.15.1 is the release for Minecraft 1.21.11.
+azalea = "=0.15.1"
+
+# Bot brain: the goose GDK as a library. alpha APIs move, so pin exactly.
+goose-agent = "=0.1.0-alpha.13"
+goose-provider-types = "=0.1.0-alpha.13"
+goose-providers = { version = "=0.1.0-alpha.13", features = ["rustls-tls"] }
+rmcp = { version = "3.4.1", default-features = false, features = ["server", "schemars"] }
+
+anyhow = "1"
+async-trait = "0.1"
+futures = "0.3"
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+toml = "1.2.0"
+owo-colors = "4.4.0"
+chrono = "0.4"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+# azalea-crypto 0.15.1 pins the release candidates rand_core =0.10.0-rc-5 and
+# rand 0.10.0-rc.7. goose needs the final rand 0.10 and uuid >= 1.23 (which
+# needs the final getrandom 0.4), and Cargo allows only one 0.10 rand_core.
+# vendor/azalea-crypto is the published 0.15.1 moved to the final rand,
+# rand_core, sha1 and sha2 releases and rsa 0.10.0-rc.20.
+[patch.crates-io]
+azalea-crypto = { path = "vendor/azalea-crypto" }
+azalea-auth = { path = "vendor/azalea-auth" }
+
+[[bin]]
+name = "mc-agents"
+path = "src/main.rs"
+
+[[bin]]
+name = "gdk-hello"
+path = "src/bin/gdk_hello.rs"
