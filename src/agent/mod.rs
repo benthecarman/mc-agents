@@ -458,8 +458,7 @@ impl Agent {
         }
     }
 
-    /// Chat is for this bot if it names the bot, says "all"/"everyone"/"bots",
-    /// or names no bot and this is the first bot in the config.
+    /// Chat is for this bot if it names the bot or says "all"/"everyone"/"bots".
     fn addressed(&self, text: &str, from_bot: bool) -> bool {
         if text.starts_with(DEBUG_TAG) {
             return false;
@@ -477,13 +476,11 @@ impl Agent {
         if from_bot {
             return mentions_me;
         }
-        let any_bot = self.config.bots.iter().any(|b| names(&lower, &b.name));
         let everyone = ["all", "everyone", "bots", "everybody"]
             .iter()
             .any(|w| lower.split(|c: char| !c.is_alphanumeric()).any(|t| t == *w));
-        // Chat that names no bot goes to the first worker.
-        let first_worker = self.config.bots.iter().find(|b| b.role == crate::config::Role::Worker);
-        mentions_me || everyone || (!any_bot && first_worker.is_some_and(|b| b.name == self.name))
+        // Chat that names no bot is for the people, not the bots.
+        mentions_me || everyone
     }
 
     fn request_thought(&mut self, text: String, tier: Tier) {

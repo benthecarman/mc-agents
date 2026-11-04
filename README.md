@@ -52,9 +52,9 @@ example `benthecarman`).
 ## Talking to the bots
 
 - Say something with a bot's name in it (a whole word, so `Mat` and `Matt`
-  are different bots): `Haley, make a wooden pickaxe`. If you
-  name no bot, the first worker in `config.toml` (Steve) answers. Use `all` to talk to
-  every bot.
+  are different bots): `Haley, make a wooden pickaxe`. Chat
+  that names no bot is ignored by every bot. Use `all` to talk to every
+  bot.
 - `Haley, come here` works: bots have `where_is(player)` and
   `go_to_player(player)`. They can see any player in the area that any of
   the bots has loaded (about 150 blocks around each bot).
