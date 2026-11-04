@@ -369,6 +369,21 @@ impl Body {
         })
     }
 
+    /// Turns to face a player, if any bot can see them.
+    pub fn look_at_player(&self, player: &str) {
+        let me = self.position();
+        let found = self
+            .entities(64.0)
+            .into_iter()
+            .filter(|e| e.kind == "player")
+            .find(|e| e.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(player)));
+        if let Some(e) = found {
+            if e.pos.distance_to(me) > 0.5 {
+                self.client.look_at(e.pos.up(1.62));
+            }
+        }
+    }
+
     /// Walks to wherever a player is now.
     pub async fn go_to_player(&self, player: &str) -> ActionResult {
         let found: serde_json::Value = serde_json::from_str(&self.where_is(player)?).map_err(|e| e.to_string())?;

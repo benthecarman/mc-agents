@@ -249,7 +249,24 @@ impl Agent {
             if let Some((text, tier)) = self.needs_thought(&event) {
                 self.request_thought_about(text, tier, about);
             }
+            self.publish();
         }
+    }
+
+    /// Puts what the bot is doing and carrying on the status board.
+    fn publish(&self) {
+        let doing = if self.body.health() <= 0.0 {
+            String::new()
+        } else if self.dreaming {
+            "dreaming".into()
+        } else if self.body.is_sleeping() {
+            "asleep".into()
+        } else if let Some(goal) = self.goal.clone().or_else(|| self.executor.goal()) {
+            goal
+        } else {
+            String::new()
+        };
+        crate::status::update(&self.name, doing, self.body.inventory_counts());
     }
 
     fn log_event(&self, event: &BotEvent) {
@@ -353,11 +370,12 @@ impl Agent {
         match event {
             BotEvent::Spawned => None,
             BotEvent::Chat { from, text, from_bot } => {
-                if !self.addressed(text, *from_bot) {
+                let from_god = self.config.bots.iter().any(|b| b.role == crate::config::Role::God && b.name == *from);
+                if !self.addressed(text, *from_bot && !from_god) {
                     return None;
                 }
                 self.note(format!("{from} said: {text}"));
-                if *from_bot {
+                if *from_bot && !from_god {
                     // Bots answering bots could go on forever: one reply per 45 s.
                     if self.last_bot_reply.is_some_and(|t| t.elapsed() < Duration::from_secs(45)) {
                         return None;
@@ -366,10 +384,11 @@ impl Agent {
                 }
                 // Someone is talking to us: we may answer, and report on what they asked for.
                 self.body.allow_speech(Duration::from_secs(120));
+                self.body.look_at_player(from);
                 self.goal_for_player = true;
                 self.reply_due = true;
                 self.asked_by = Some(from.clone());
-                let who = if *from_bot { "Your fellow bot" } else { "Player" };
+                let who = if from_god { "The god" } else if *from_bot { "Your fellow bot" } else { "Player" };
                 // A message is a steer: stop what the body is doing until the model decides.
                 if !self.dreaming {
                     self.executor.pause();

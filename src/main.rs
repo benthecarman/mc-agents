@@ -38,6 +38,13 @@ async fn main() -> Result<()> {
     match Console::from_env() {
         Ok(console) => {
             tokio::spawn(keep_world(console, config.server.clone()));
+            let workers = config.bots.iter().filter(|b| b.role == mc_agents::config::Role::Worker).map(|b| b.name.clone()).collect();
+            match Console::from_env() {
+                Ok(console) => {
+                    tokio::spawn(mc_agents::status::nameplates(console, workers));
+                }
+                Err(e) => log::log("server", Kind::Fail, format!("no nameplates: {e:#}")),
+            }
         }
         Err(_) => log::log(
             "server",

@@ -7,3 +7,4 @@ pub mod log;
 pub mod memory;
 pub mod runtime;
 pub mod skills;
+pub mod status;

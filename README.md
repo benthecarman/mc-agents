@@ -60,6 +60,9 @@ another name for yourself (for example `benthecarman`).
   the bots has loaded (about 150 blocks around each bot).
 - A message that starts with a bot's name (`Zeus, ...` or `@Zeus ...`) is
   for that bot only, even if it names others.
+- Each bot's current goal shows next to its name, over its head and in the
+  tab list (through a server team suffix, so it shows in chat too). A bot
+  turns to face whoever talks to it.
 - A message interrupts the bot. It stops what it is doing and decides
   again, so `Haley, actually get dirt instead` changes its plan. If the
   bot is still thinking about an earlier message, the new one goes into
@@ -80,6 +83,10 @@ console, so it needs `MC_CONSOLE`. Call it by name:
 - `Zeus, make it thunder` / `Zeus, make it night`
 - `Zeus, teleport me to Jasper` / `Zeus, give Haley a bed`
 - `@Zeus smite Jasper` (lightning, for those who deserve it)
+- `Zeus, start a challenge: first to 8 logs wins a diamond`. Zeus announces
+  a race to every bot and judges it from their inventories (only items
+  collected after the start count). The winner gets the prize, a title and a
+  firework. Time limit 1 to 10 minutes.
 
 Players listed in the god's `obeys` (in `config.toml`) are its masters: it
 carries out whatever they command, smiting included, though it may grumble.

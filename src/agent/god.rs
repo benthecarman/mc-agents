@@ -8,7 +8,8 @@
 //! and numbers are validated. The model never writes a console command.
 
 use std::{
-    sync::Arc,
+    collections::HashMap,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -26,7 +27,21 @@ use crate::{
     config::{BotConfig, Config, Role},
     console::Console,
     log::{self, Kind},
+    status,
 };
+
+/// A race between the mortals, judged from the status board.
+struct Challenge {
+    item: String,
+    count: i32,
+    reward: String,
+    reward_count: i64,
+    deadline: Instant,
+    /// What each bot held when it started, so only new items count.
+    baseline: HashMap<String, i32>,
+}
+
+type Arena = Arc<Mutex<Option<Challenge>>>;
 
 pub async fn run(
     body: Body,
@@ -52,7 +67,9 @@ pub async fn run(
             None
         }
     };
-    let tools = console.as_ref().map(|c| powers(&body, c.clone()));
+    let mortals: Vec<String> = config.bots.iter().filter(|b| b.role == Role::Worker).map(|b| b.name.clone()).collect();
+    let arena: Arena = Default::default();
+    let tools = console.as_ref().map(|c| powers(&body, c.clone(), arena.clone(), mortals.clone()));
     let mut thinking = false;
     let mut calls: (u64, u32) = (0, 0);
     let mut last_whim = Instant::now();
@@ -99,6 +116,9 @@ pub async fn run(
                 Some(format!("{who} {from} says: \"{text}\"{order}"))
             }
             BotEvent::Heartbeat => {
+                if let Some(console) = &console {
+                    judge(&body, console, &arena, &mortals).await;
+                }
                 if whim_every == 0 || last_whim.elapsed() < Duration::from_secs(whim_every) || thinking {
                     continue;
                 }
@@ -173,12 +193,13 @@ fn think(
     let system = format!(
         "You are {name}, the god of this Minecraft world. Personality: {personality}\n\
          You do not live in the world; you rule it with your powers: set_weather, set_time, smite (lightning), \
-         teleport, give. players lists who is online and where. say speaks in chat (under 20 words, in character).\n\
+         teleport, give, start_challenge (a race between the bots that you judge automatically). players lists who is online and where. say speaks in chat (under 20 words, in character).\n\
          The bots here are mortals with their own memories: {mortals}. They save memory only by sleeping at night \
          and lose unsaved memory when they die, so night and lightning are high stakes for them.\n\
          {masters}\
          Rules: do what other players ask when it is reasonable. Use at most 2 powers per turn. Unless your master \
          orders it, smite only someone who asked for it, insulted you, or truly deserves it, and say why. \
+         During a challenge you never hand out prizes yourself: the judge checks inventories and pays the winner. \
          Always say what you did.",
         name = bot.name,
         personality = if bot.personality.is_empty() { "Grand, theatrical, fair." } else { &bot.personality },
@@ -231,7 +252,7 @@ fn think(
 }
 
 /// The god's tools. Each one fills a fixed command template.
-fn powers(body: &Body, console: Arc<Console>) -> Arc<ToolSet> {
+fn powers(body: &Body, console: Arc<Console>, arena: Arena, mortals: Vec<String>) -> Arc<ToolSet> {
     let set = ToolSet::new();
     macro_rules! power {
         ($name:expr, $desc:expr, $schema:expr, |$b:ident, $a:ident| $make:expr) => {{
@@ -355,7 +376,106 @@ fn powers(body: &Body, console: Arc<Console>) -> Arc<ToolSet> {
             Ok::<_, String>((format!("give {player} minecraft:{item} {count}"), format!("gave {player} {count} {item}")))
         }
     );
+    {
+        let body = body.clone();
+        set.register(ToolDef::new(
+            "start_challenge",
+            "Start a race between the mortal bots: the first to collect `count` of `item` wins `reward`. \
+             Pick something they can gather in a few minutes, e.g. 8 log (any log), 16 cobblestone, 10 dirt, 3 wheat_seeds.",
+            json!({"type": "object", "properties": {
+                "item": {"type": "string", "description": "item id; log, planks and wool match every kind"},
+                "count": {"type": "integer", "description": "1-64"},
+                "reward": {"type": "string", "description": "item id for the prize, e.g. diamond"},
+                "reward_count": {"type": "integer", "description": "1-64"},
+                "minutes": {"type": "integer", "description": "time limit, 1-10"}
+            }, "required": ["item", "count", "reward"]}),
+            move |a| {
+                let (body, arena, mortals) = (body.clone(), arena.clone(), mortals.clone());
+                async move {
+                    let id = |v: &Value| {
+                        let s = v.as_str().unwrap_or_default().trim().trim_start_matches("minecraft:").to_string();
+                        if s.is_empty() || s.len() > 40 || !s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+                            Err(format!("'{s}' is not an item id"))
+                        } else {
+                            Ok(s)
+                        }
+                    };
+                    let (item, reward) = (id(&a["item"])?, id(&a["reward"])?);
+                    let count = a["count"].as_i64().unwrap_or(8).clamp(1, 64) as i32;
+                    let reward_count = a["reward_count"].as_i64().unwrap_or(1).clamp(1, 64);
+                    let minutes = a["minutes"].as_i64().unwrap_or(5).clamp(1, 10) as u64;
+                    let mut arena = arena.lock().unwrap();
+                    if let Some(c) = arena.as_ref() {
+                        return Err(format!("a challenge is already running: {} {}", c.count, c.item));
+                    }
+                    let baseline = mortals
+                        .iter()
+                        .map(|m| (m.clone(), status::get(m).map(|s| status::count_matching(&s.items, &item)).unwrap_or(0)))
+                        .collect();
+                    *arena = Some(Challenge {
+                        item: item.clone(),
+                        count,
+                        reward: reward.clone(),
+                        reward_count,
+                        deadline: Instant::now() + Duration::from_secs(minutes * 60),
+                        baseline,
+                    });
+                    drop(arena);
+                    let what = item.replace('_', " ");
+                    log::log(&body.name, Kind::Plan, format!("challenge: {count} {item} for {reward_count} {reward}, {minutes} min"));
+                    body.allow_speech(Duration::from_secs(10));
+                    body.say(&format!(
+                        "Everyone: a challenge! The first bot to collect {count} {what} wins {reward_count} {}. \
+                         Keep them in your inventory. You have {minutes} minutes. Go!",
+                        reward.replace('_', " ")
+                    ))?;
+                    Ok(format!("challenge started and announced; it is judged automatically"))
+                }
+            },
+        ));
+    }
     set
+}
+
+/// Ends the challenge when a bot has collected enough, or time runs out.
+async fn judge(body: &Body, console: &Console, arena: &Arena, mortals: &[String]) {
+    let (winner, challenge) = {
+        let mut guard = arena.lock().unwrap();
+        let Some(c) = guard.as_ref() else { return };
+        let winner = mortals
+            .iter()
+            .map(|m| {
+                let held = status::get(m).map(|s| status::count_matching(&s.items, &c.item)).unwrap_or(0);
+                (m.clone(), held - c.baseline.get(m).copied().unwrap_or(0))
+            })
+            .filter(|(_, gained)| *gained >= c.count)
+            .max_by_key(|(_, gained)| *gained)
+            .map(|(m, _)| m);
+        if winner.is_none() && Instant::now() < c.deadline {
+            return;
+        }
+        (winner, guard.take().unwrap())
+    };
+    let what = challenge.item.replace('_', " ");
+    body.allow_speech(Duration::from_secs(10));
+    match winner {
+        Some(winner) => {
+            log::log(&body.name, Kind::Result, format!("challenge won by {winner}"));
+            let prize = challenge.reward.replace('_', " ");
+            let _ = console.run(&format!("give {winner} minecraft:{} {}", challenge.reward, challenge.reward_count)).await;
+            let _ = console.run(&format!("title @a title {{\"text\":\"{winner} wins!\",\"color\":\"gold\"}}")).await;
+            let _ = console.run(&format!("title @a subtitle {{\"text\":\"first to {} {what}\"}}", challenge.count)).await;
+            let _ = console.run(&format!("execute at {winner} run summon minecraft:firework_rocket ~ ~1 ~")).await;
+            let _ = body.say(&format!(
+                "Everyone: the challenge is over! {winner} collected {} {what} first and wins {} {prize}. The rest of you may stop.",
+                challenge.count, challenge.reward_count
+            ));
+        }
+        None => {
+            log::log(&body.name, Kind::Result, "challenge timed out");
+            let _ = body.say(&format!("Everyone: time is up! Nobody collected {} {what}. Pathetic. You may stop.", challenge.count));
+        }
+    }
 }
 
 fn online(body: &Body) -> Vec<String> {
