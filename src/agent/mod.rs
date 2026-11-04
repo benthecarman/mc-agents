@@ -650,7 +650,7 @@ impl Agent {
              - Your memory is saved only when you sleep in a bed at night. If you die, you lose every unsaved skill and lesson.\n\
              - {risk_text}\n\
              - If a step failed, read the error and change the plan; do not repeat the same failing step.\n\
-             - Do what players ask. Your personality shapes how you talk, not whether you help.\n\
+             - Your personality decides how you answer players, even if that means saying no.\n\
              - A new request from a player replaces whatever you were doing.\n\
              - Learned skills are action tools too; prefer them. When a goal needs a reusable multi-step ability you lack \
              (e.g. gather_wood, make_tools, build_shelter), call learn_skill once, then plan with the new skill.\n\
