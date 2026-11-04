@@ -27,7 +27,7 @@ use goose_agent::{
     inference::{InferenceEffect, InferenceRequestPreparer, InferenceRunner, PreparedInferenceRequest},
     machine::{EffectHandler, MachineSession, SessionLoader, StateMachine, Step},
     operation::{
-        assistant_turn_count, last_effective_role, messages_since_kickoff, not_applicable,
+        applied, assistant_turn_count, last_effective_role, messages_since_kickoff, not_applicable,
         yielded, Emitter, InferenceInput, MachineEffect, Operation, OperationResult,
     },
     tool::{ToolOperation, ToolProvider},
@@ -141,6 +141,17 @@ impl Llm {
     /// Runs one agent turn on a fresh conversation and returns when the model
     /// stops calling tools, `stop_when` holds, or the budget runs out.
     pub async fn run_turn(&self, turn: Turn, on_event: impl Fn(&AgentEvent)) -> Result<TurnOutcome> {
+        self.run_turn_steered(turn, None, on_event).await
+    }
+
+    /// Like [`Llm::run_turn`], but messages pushed into `steer` while the turn
+    /// runs are added to its conversation before the next model call.
+    pub async fn run_turn_steered(
+        &self,
+        turn: Turn,
+        steer: Option<Steer>,
+        on_event: impl Fn(&AgentEvent),
+    ) -> Result<TurnOutcome> {
         let Turn {
             system,
             user,
@@ -160,6 +171,10 @@ impl Llm {
         let mut steps: Vec<Step<'_, TurnSession, Effect>> = vec![Step::Operation(Arc::new(
             ToolOperation::new().with_provider(tools),
         ))];
+        // After pending tool calls are answered, so the conversation stays valid.
+        if let Some(steer) = steer {
+            steps.push(Step::Operation(Arc::new(SteerIn(steer))));
+        }
         if let Some(predicate) = stop_when {
             steps.push(Step::Operation(Arc::new(StopWhen(predicate))));
         }
@@ -442,6 +457,47 @@ impl Operation<TurnSession, Effect> for StopWhen {
             return yielded();
         }
         not_applicable()
+    }
+}
+
+/// Messages waiting to be handed to a running turn.
+pub type SteerInbox = Arc<Mutex<Vec<String>>>;
+
+/// Messages that arrive while a turn runs. See [`Llm::run_turn_steered`].
+pub struct Steer {
+    pub inbox: SteerInbox,
+    /// Runs when messages are handed over, e.g. to drop a decision the
+    /// model made before it saw them.
+    pub on_inject: Box<dyn Fn() + Send + Sync>,
+}
+
+
+/// Our operation: hands steering messages to the model mid-turn, so a player
+/// can change the bot's mind without waiting for the turn to end.
+struct SteerIn(Steer);
+
+#[async_trait]
+impl Operation<TurnSession, Effect> for SteerIn {
+    fn name(&self) -> &'static str {
+        "steer"
+    }
+
+    async fn run(
+        &self,
+        _session: &TurnSession,
+        _conversation: &Conversation,
+        _emit: &Emitter,
+    ) -> Result<OperationResult<Effect>> {
+        let messages = std::mem::take(&mut *self.0.inbox.lock().unwrap());
+        if messages.is_empty() {
+            return not_applicable();
+        }
+        (self.0.on_inject)();
+        let text = format!(
+            "New message while you were working. It may change what you should do; your plan is paused until you decide again:\n{}",
+            messages.join("\n")
+        );
+        applied([Effect::Message(Message::user().with_text(text))])
     }
 }
 

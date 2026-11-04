@@ -125,6 +125,10 @@ struct Agent {
     pending: Vec<(String, Option<u64>)>,
     /// The thought being requested answers chat, so plain text may be posted.
     reply_due: bool,
+    /// Chat that arrives mid-thought goes straight into the running turn.
+    steer: crate::brain::SteerInbox,
+    /// The running thought was steered by chat.
+    steered: bool,
     pending_tier: Tier,
     failures_in_a_row: u32,
     calls_today: (u64, u32),
@@ -191,6 +195,8 @@ impl Agent {
             thinking: false,
             pending: Vec::new(),
             reply_due: false,
+            steer: Default::default(),
+            steered: false,
             pending_tier: Tier::Fast,
             failures_in_a_row: 0,
             calls_today: (0, 0),
@@ -364,6 +370,16 @@ impl Agent {
                 self.reply_due = true;
                 self.asked_by = Some(from.clone());
                 let who = if *from_bot { "Your fellow bot" } else { "Player" };
+                // A message is a steer: stop what the body is doing until the model decides.
+                if !self.dreaming {
+                    self.executor.pause();
+                }
+                if self.thinking && !self.dreaming {
+                    log::log(&self.name, Kind::Event, format!("steer: <{from}> {text}"));
+                    self.steer.lock().unwrap().push(format!("{who} {from} says to you: \"{text}\""));
+                    self.steered = true;
+                    return None;
+                }
                 Some((format!("{who} {from} says to you: \"{text}\""), Tier::Fast))
             }
             BotEvent::ThoughtDone { decision, spoke, text, tier, calls, chat } => {
@@ -373,6 +389,8 @@ impl Agent {
             BotEvent::ThoughtFailed { error } => {
                 log::log(&self.name, Kind::Fail, format!("thinking failed: {error}"));
                 self.thinking = false;
+                self.steered = false;
+                self.executor.resume();
                 self.flush_pending();
                 None
             }
@@ -719,6 +737,8 @@ impl Agent {
     /// One GDK turn in a background task. The result comes back as an event.
     fn think(&mut self, event: String, tier: Tier, escalate: bool) {
         let chat = std::mem::take(&mut self.reply_due);
+        let steer = self.steer.clone();
+        self.steered = false;
         let (set, decision) = plan::planning_tools(&self.tools, &tools::SENSE_TOOLS, self.action_names(), escalate);
         let spoke = Arc::new(std::sync::atomic::AtomicBool::new(false));
         {
@@ -730,6 +750,13 @@ impl Agent {
             }));
         }
         let stop_decision = decision.clone();
+        let steer = {
+            let decision = decision.clone();
+            crate::brain::Steer {
+                inbox: steer,
+                on_inject: Box::new(move || *decision.lock().unwrap() = Decision::default()),
+            }
+        };
         let turn = Turn {
             system: self.system_prompt(escalate),
             user: self.context(&event),
@@ -749,7 +776,7 @@ impl Agent {
         self.spawn_mind(async move {
             let log_name = name.clone();
             let outcome = llm
-                .run_turn(turn, move |e| {
+                .run_turn_steered(turn, Some(steer), move |e| {
                     if let Some(line) = describe_event(e) {
                         log::log(&log_name, Kind::Llm, truncate(&line, 220));
                     }
@@ -777,6 +804,13 @@ impl Agent {
     fn on_thought(&mut self, decision: Decision, spoke: bool, text: &str, _tier: Tier, calls: usize, chat: bool) {
         self.thinking = false;
         self.calls_today.1 += calls as u32;
+        let chat = chat || std::mem::take(&mut self.steered);
+        // Chat that came in too late for the turn to see gets a thought of its own.
+        let missed = std::mem::take(&mut *self.steer.lock().unwrap());
+        if !missed.is_empty() {
+            self.pending.insert(0, (missed.join("\n"), None));
+            self.reply_due = true;
+        }
         if !spoke && !text.is_empty() {
             if chat {
                 // The model answered in plain text instead of calling say.
@@ -802,8 +836,12 @@ impl Agent {
             log::log(&self.name, Kind::Skill, format!("wants to learn {}: {}", request.name, request.description));
             self.start_learning(request);
             return;
-        } else if !did_say {
-            log::log(&self.name, Kind::Think, "decided nothing");
+        } else {
+            if !did_say {
+                log::log(&self.name, Kind::Think, "decided nothing");
+            }
+            // Small talk: carry on with whatever a steer paused.
+            self.executor.resume();
         }
         self.flush_pending();
     }
@@ -959,6 +997,8 @@ impl Agent {
         self.thinking = false;
         self.pending.clear();
         self.late_lessons.clear();
+        self.steer.lock().unwrap().clear();
+        self.steered = false;
         let lost_skills: Vec<String> = self.memory.working_skills().iter().map(|s| s.name.clone()).collect();
         let lost_lessons = self.memory.lessons().len();
         let doing = self.goal.clone().unwrap_or_else(|| "nothing in particular".into());
@@ -1029,6 +1069,8 @@ impl Agent {
                 self.thinking = false;
                 self.dreaming = false;
                 self.pending.clear();
+                self.steer.lock().unwrap().clear();
+                self.steered = false;
                 self.recent.clear();
                 self.failures_in_a_row = 0;
                 self.calls_today = (self.body.time().day(), 0);

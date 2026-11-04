@@ -60,6 +60,10 @@ another name for yourself (for example `benthecarman`).
   the bots has loaded (about 150 blocks around each bot).
 - A message that starts with a bot's name (`Zeus, ...` or `@Zeus ...`) is
   for that bot only, even if it names others.
+- A message interrupts the bot. It stops what it is doing and decides
+  again, so `Haley, actually get dirt instead` changes its plan. If the
+  bot is still thinking about an earlier message, the new one goes into
+  that same model turn. After small talk, the bot carries on with its task.
 - Test commands skip the model:
   - `!Haley mine log 3` and `!all look_around` run a tool directly.
   - `!Haley memory` shows saved and unsaved memory.
