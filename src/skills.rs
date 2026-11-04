@@ -38,9 +38,9 @@ use crate::{
 };
 
 /// Bot tools exposed to skills, with their positional parameters.
-pub const BOT_API: [&str; 14] = [
-    "look_around", "inventory", "goto", "follow", "mine", "place", "craft", "smelt", "say", "eat",
-    "attack", "sleep", "write_book", "read_book",
+pub const BOT_API: [&str; 16] = [
+    "look_around", "inventory", "goto", "follow", "where_is", "go_to_player", "mine", "place", "craft",
+    "smelt", "say", "eat", "attack", "sleep", "write_book", "read_book",
 ];
 
 pub const API_DOCS: &str = "\
@@ -52,6 +52,7 @@ Bot API (every call blocks until the action is done; on failure it throws an err
   find_block(name) -> #{x, y, z} or ()  // nearest block within 64, name or group like \"log\"
   go_to(x, y, z)              // walk there (`goto` is a reserved word in Rhai)
   follow(player, seconds)
+  where_is(player) -> #{player, position: [x,y,z], distance}; go_to_player(player)
   mine(block, count) -> #{mined, gained}
   place(block, x, y, z)
   craft(item, count) -> #{crafted, count}    // makes missing planks/sticks itself

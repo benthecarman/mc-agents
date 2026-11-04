@@ -14,7 +14,7 @@ use crate::{
 };
 
 /// Tools that only read the world. They run immediately during planning.
-pub const SENSE_TOOLS: [&str; 3] = ["look_around", "inventory", "list_skills"];
+pub const SENSE_TOOLS: [&str; 4] = ["look_around", "inventory", "list_skills", "where_is"];
 
 fn int(args: &Value, key: &str) -> Result<i32, String> {
     args.get(key)
@@ -40,6 +40,7 @@ pub fn positional(tool: &str) -> &'static [&'static str] {
         "look_around" => &["radius"],
         "goto" => &["x", "y", "z"],
         "follow" => &["player", "seconds"],
+        "where_is" | "go_to_player" => &["player"],
         "mine" => &["block", "count"],
         "place" => &["block", "x", "y", "z"],
         "craft" | "smelt" => &["item", "count"],
@@ -84,6 +85,18 @@ pub fn register_core(set: &ToolSet, body: Body) {
         "Follow a player for some seconds.",
         object_schema(&[("player", "string", "Player name"), ("seconds", "integer", "How long, 3-120")]),
         |b, a| b.follow(&text(&a, "player")?, int_or(&a, "seconds", 30) as u64).await
+    );
+    tool!(
+        "where_is",
+        "Where a player is (position and distance). Leave player empty to list every player in sight.",
+        object_schema(&[("player", "string", "Player name, or empty for everyone")]),
+        |b, a| b.where_is(a.get("player").and_then(|v| v.as_str()).unwrap_or_default())
+    );
+    tool!(
+        "go_to_player",
+        "Walk to where a player is now. Use for \"come here\".",
+        object_schema(&[("player", "string", "Player name")]),
+        |b, a| b.go_to_player(&text(&a, "player")?).await
     );
     tool!(
         "mine",

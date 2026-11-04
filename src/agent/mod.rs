@@ -568,9 +568,10 @@ impl Agent {
              {lineage}\
              {others}\
              You think only when something happens; between thoughts your plan runs on its own.\n\n\
-             Tools you call now: look_around and inventory (results come back to you), say (chat, under 20 words), and the decision tools.\n\
+             Tools you call now: look_around, inventory and where_is (results come back to you), say (chat, under 20 words), and the decision tools.\n\
              Action tools you can use as plan steps:\n{tools}\n\n\
              Rules:\n\
+             - \"Come here\" from a player means a plan with go_to_player(player=<their name>).\n\
              - Plans have 1-8 steps. Take positions from look_around; never invent coordinates.\n\
              - Logs need no tool. Stone and ores need a pickaxe; iron ore needs a stone pickaxe.\n\
              - Planks and sticks craft anywhere. Tools, chest, furnace and bed need a placed crafting_table within 32 blocks.\n\

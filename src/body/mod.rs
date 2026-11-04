@@ -313,6 +313,58 @@ impl Body {
         Ok(format!("followed {player} for {seconds}s"))
     }
 
+    /// Finds a player: any one this swarm can see (each bot loads the area
+    /// around it), or, if `player` is empty, every visible player.
+    pub fn where_is(&self, player: &str) -> ActionResult {
+        let me = self.position();
+        let players: Vec<(String, Vec3)> = self
+            .entities(100_000.0)
+            .into_iter()
+            .filter(|e| e.kind == "player")
+            .filter_map(|e| e.name.map(|n| (n, e.pos)))
+            .collect();
+        let describe = |(name, pos): &(String, Vec3)| {
+            json!({
+                "player": name,
+                "position": [pos.x.floor() as i32, pos.y.floor() as i32, pos.z.floor() as i32],
+                "distance": me.distance_to(*pos).round(),
+            })
+        };
+        let player = player.trim().trim_start_matches('@');
+        if player.is_empty() || player == "all" {
+            if players.is_empty() {
+                return Err("I can't see any other players right now".into());
+            }
+            return Ok(json!(players.iter().map(describe).collect::<Vec<_>>()).to_string());
+        }
+        if let Some(found) = players.iter().find(|(n, _)| n.eq_ignore_ascii_case(player)) {
+            return Ok(describe(found).to_string());
+        }
+        let online = self.client.tab_list().values().any(|p| p.profile.name.eq_ignore_ascii_case(player));
+        Err(if online {
+            format!("{player} is online but too far away for any of us to see")
+        } else {
+            format!("no player named {player} is online")
+        })
+    }
+
+    /// Walks to wherever a player is now.
+    pub async fn go_to_player(&self, player: &str) -> ActionResult {
+        let found: serde_json::Value = serde_json::from_str(&self.where_is(player)?).map_err(|e| e.to_string())?;
+        let p = &found["position"];
+        let target = Vec3::new(
+            p[0].as_f64().unwrap_or(0.0) + 0.5,
+            p[1].as_f64().unwrap_or(0.0),
+            p[2].as_f64().unwrap_or(0.0) + 0.5,
+        );
+        let distance = self.position().distance_to(target);
+        if distance <= 3.0 {
+            return Ok(format!("already next to {player}"));
+        }
+        self.walk_to(target, 2.5, Duration::from_secs_f64(15.0 + distance * 0.6)).await?;
+        Ok(format!("reached {player} at {} {} {}", target.x.floor(), target.y.floor(), target.z.floor()))
+    }
+
     /// Mines up to `n` of the nearest blocks matching `block` and picks up
     /// what drops. `block` may be a group name such as `log` or `iron_ore`.
     pub async fn mine(&self, block: &str, n: u32) -> ActionResult {
