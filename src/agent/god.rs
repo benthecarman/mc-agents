@@ -30,6 +30,31 @@ use crate::{
     status,
 };
 
+const HOSTILE: &[&str] = &[
+    "zombie", "husk", "drowned", "zombie_villager", "skeleton", "stray", "bogged", "creeper", "spider",
+    "cave_spider", "witch", "slime", "magma_cube", "phantom", "enderman", "silverfish", "blaze", "ghast",
+    "wither_skeleton", "piglin_brute", "pillager", "vindicator", "evoker", "ravager", "vex", "guardian",
+    "breeze", "zombified_piglin", "hoglin", "zoglin", "shulker", "endermite",
+];
+
+const PEACEFUL: &[&str] = &[
+    "pig", "cow", "sheep", "chicken", "horse", "donkey", "mule", "rabbit", "wolf", "cat", "fox", "goat",
+    "llama", "panda", "parrot", "bee", "frog", "turtle", "axolotl", "camel", "armadillo", "sniffer",
+    "villager", "iron_golem", "snow_golem", "allay", "polar_bear", "ocelot", "mooshroom", "squid",
+    "glow_squid", "dolphin", "cod", "salmon", "bat", "strider", "piglin", "trader_llama", "wandering_trader",
+];
+
+/// A mob Zeus may summon or strike down. Never a player, and no bosses
+/// that would wreck the world.
+fn mob(name: &str) -> Result<String, String> {
+    let name = name.trim().trim_start_matches("minecraft:").to_lowercase().replace(' ', "_");
+    if HOSTILE.contains(&name.as_str()) || PEACEFUL.contains(&name.as_str()) {
+        Ok(name)
+    } else {
+        Err(format!("'{name}' is not a mob you may use; try e.g. zombie, creeper, skeleton, cow, wolf"))
+    }
+}
+
 /// A race between the mortals, judged from the status board.
 struct Challenge {
     item: String,
@@ -71,6 +96,8 @@ pub async fn run(
     let arena: Arena = Default::default();
     let tools = console.as_ref().map(|c| powers(&body, c.clone(), arena.clone(), mortals.clone()));
     let mut thinking = false;
+    // Prayers that came in while the god was thinking, oldest first.
+    let mut waiting: std::collections::VecDeque<String> = Default::default();
     let mut calls: (u64, u32) = (0, 0);
     let mut last_whim = Instant::now();
     let whim_every = config.limits.god_whim_secs;
@@ -135,12 +162,12 @@ pub async fn run(
                 if !spoke && !text.is_empty() {
                     let _ = body.say(&truncate(&text, 200));
                 }
-                None
+                waiting.pop_front()
             }
             BotEvent::ThoughtFailed { error } => {
                 thinking = false;
                 log::log(&name, Kind::Fail, format!("thinking failed: {error}"));
-                None
+                waiting.pop_front()
             }
             _ => None,
         };
@@ -151,6 +178,9 @@ pub async fn run(
             continue;
         };
         if thinking {
+            if waiting.len() < 5 {
+                waiting.push_back(prompt);
+            }
             continue;
         }
         let day = body.time().day();
@@ -193,7 +223,7 @@ fn think(
     let system = format!(
         "You are {name}, the god of this Minecraft world. Personality: {personality}\n\
          You do not live in the world; you rule it with your powers: set_weather, set_time, smite (lightning), \
-         teleport, give, start_challenge (a race between the bots that you judge automatically). players lists who is online and where. say speaks in chat (under 20 words, in character).\n\
+         teleport, give, spawn_mob, kill_mobs (never players), start_challenge (a race between the bots that you judge automatically). players lists who is online and where. say speaks in chat (under 20 words, in character).\n\
          The bots here are mortals with their own memories: {mortals}. They save memory only by sleeping at night \
          and lose unsaved memory when they die, so night and lightning are high stakes for them.\n\
          {masters}\
@@ -376,6 +406,64 @@ fn powers(body: &Body, console: Arc<Console>, arena: Arena, mortals: Vec<String>
             Ok::<_, String>((format!("give {player} minecraft:{item} {count}"), format!("gave {player} {count} {item}")))
         }
     );
+    {
+        let (body, console) = (body.clone(), console.clone());
+        set.register(ToolDef::new(
+            "spawn_mob",
+            "Summon mobs next to a player: a monster to scare them, or an animal as a gift.",
+            object_schema(&[
+                ("mob", "string", "mob id, e.g. zombie, creeper, skeleton, spider, cow, wolf, horse"),
+                ("near", "string", "online player to spawn them next to"),
+                ("count", "integer", "1-10"),
+            ]),
+            move |a| {
+                let (body, console) = (body.clone(), console.clone());
+                async move {
+                    let mob = mob(a["mob"].as_str().unwrap_or_default())?;
+                    let near = online_player(&body, a["near"].as_str().unwrap_or_default())?;
+                    let count = a["count"].as_i64().unwrap_or(1).clamp(1, 10);
+                    // A few blocks away, so the player sees it arrive.
+                    let command = format!("execute at {near} run summon minecraft:{mob} ~2 ~ ~2");
+                    log::log(&body.name, Kind::Tool, format!("/{command} x{count}"));
+                    for _ in 0..count {
+                        console.run(&command).await.map_err(|e| format!("the console failed: {e:#}"))?;
+                    }
+                    Ok(format!("summoned {count} {mob} next to {near}"))
+                }
+            },
+        ));
+    }
+    {
+        let (body, console) = (body.clone(), console.clone());
+        set.register(ToolDef::new(
+            "kill_mobs",
+            "Strike down mobs around a player: one kind, or every hostile mob. Never hits players.",
+            object_schema(&[
+                ("mob", "string", "a mob id such as zombie, or \"hostile\" for every monster"),
+                ("near", "string", "online player at the centre"),
+                ("radius", "integer", "blocks, 1-64"),
+            ]),
+            move |a| {
+                let (body, console) = (body.clone(), console.clone());
+                async move {
+                    let near = online_player(&body, a["near"].as_str().unwrap_or_default())?;
+                    let radius = a["radius"].as_i64().unwrap_or(32).clamp(1, 64);
+                    let wanted = a["mob"].as_str().unwrap_or("hostile").trim().to_lowercase();
+                    let kinds: Vec<String> = if matches!(wanted.as_str(), "hostile" | "hostiles" | "monsters" | "all") {
+                        HOSTILE.iter().map(|m| m.to_string()).collect()
+                    } else {
+                        vec![mob(&wanted)?]
+                    };
+                    log::log(&body.name, Kind::Tool, format!("kill {wanted} within {radius} of {near}"));
+                    for kind in &kinds {
+                        let command = format!("execute at {near} run kill @e[type=minecraft:{kind},distance=..{radius}]");
+                        console.run(&command).await.map_err(|e| format!("the console failed: {e:#}"))?;
+                    }
+                    Ok(format!("struck down every {wanted} within {radius} blocks of {near}"))
+                }
+            },
+        ));
+    }
     {
         let body = body.clone();
         set.register(ToolDef::new(

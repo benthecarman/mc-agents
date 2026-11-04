@@ -83,6 +83,9 @@ console, so it needs `MC_CONSOLE`. Call it by name:
 - `Zeus, make it thunder` / `Zeus, make it night`
 - `Zeus, teleport me to Jasper` / `Zeus, give Haley a bed`
 - `@Zeus smite Jasper` (lightning, for those who deserve it)
+- `Zeus, spawn 3 zombies near Jasper` / `Zeus, kill every monster near me`.
+  Mobs come from a fixed list (no Wither or Ender Dragon), and kills
+  target mob types only, so they never hit a player or a bot.
 - `Zeus, start a challenge: first to 8 logs wins a diamond`. Zeus announces
   a race to every bot and judges it from their inventories (only items
   collected after the start count). The winner gets the prize, a title and a
