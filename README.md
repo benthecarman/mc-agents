@@ -77,7 +77,8 @@ console, so it needs `MC_CONSOLE`. Call it by name:
 - `Zeus, teleport me to Jasper` / `Zeus, give Haley a bed`
 - `@Zeus smite Jasper` (lightning, for those who deserve it)
 
-It also acts unasked every `limits.god_whim_secs` (0 turns this off). Its
+If you set `limits.god_whim_secs`, it also acts unasked that often (the
+default, 0, means only when called). Its
 powers are `set_weather`, `set_time`, `smite`, `teleport`, `give` and
 `players`. Each one fills a fixed command template, and its arguments are
 checked: players must be online, and items and coordinates must be valid.
@@ -96,11 +97,17 @@ azalea events ─► runtime ─► BotEvent queue ─► agent loop
 ```
 
 - **Event loop** (`src/agent/mod.rs`). The bot thinks only when something
-  happens: chat, a failed step, a finished plan, dusk, night, a full
-  inventory. Reflexes act without a model. Chat and routine events go to the
-  fast model. Repeated failures and goal planning go to the strong model.
-  With no goal for `limits.idle_goal_secs`, a bot picks a goal that fits its
-  personality.
+  happens: chat, a failed step, a finished plan, and, while it works on a
+  goal, dusk, night or a full inventory. Reflexes (flee, fight back, escape
+  water, eat) act without a model. Chat and routine events go to the fast
+  model. Repeated failures and goal planning go to the strong model. By
+  default a bot only does what players ask. Set `limits.idle_goal_secs` to
+  let a bot with no goal pick one that fits its personality.
+- **Chat.** A bot posts in chat only while a player is talking to it: for
+  two minutes after a player names it, and once more to report how the
+  player's task went. Everything else it would say (dusk decisions, dream
+  summaries, death notices) goes to the console, marked `(not said)`. Bots
+  ignore each other's chat.
 - **Snapshots.** Every turn gets long-term memory, working memory, recent
   events, the world around the bot, the goal and the plan. It also gets a
   **stakes** line: unsaved skills and lessons, time until dark, distance to
@@ -126,10 +133,10 @@ azalea events ─► runtime ─► BotEvent queue ─► agent loop
   skills, rules, lessons, places, the day's events and other bots' deaths
   (nightmares). It merges duplicate skills, fixes or drops broken ones, and
   writes rules and a journal entry. The result is committed to
-  `memory/<bot>`, with the journal as the commit body. The bot says a
-  summary in chat.
+  `memory/<bot>`, with the journal as the commit body. The console shows
+  the journal and a one-line summary.
 - **Death.** Working memory is deleted (`git checkout && git clean`). Unsaved
-  skills stop being tools. The bot says in chat what it lost. Its death
+  skills stop being tools. The console shows what it lost. Its death
   becomes a nightmare for the other bots' next dream.
 - **Books** (`write_book`, `read_book`). A bot can write its rules and
   skills into a book and quill and put it in a chest. Any bot can read the
@@ -152,18 +159,20 @@ sooner. Start the server and `cargo run --release`, then join the game.
    pickaxe), runs the plan and replans when a step fails.
 2. **Skill writing.** Say `Jasper, learn a skill to gather wood, then get 8
    logs`. The console shows the Rhai code, the test run and the check. In
-   chat, Jasper says: "I learned a new skill: gather_wood. I must sleep to
+   chat, Jasper reports: "I learned a new skill: gather_wood. I must sleep to
    remember it." `!Jasper memory` lists it as unsaved.
 3. **Night, far from home.** Give Jasper a bed (`/give Jasper white_bed`), send
-   Jasper away (`Jasper, go mine coal`), and type `/time set 12000`. At dusk each
-   bot says whether it races back or pushes on. Careful Haley (risk 0.2) goes
-   to bed. Jasper (risk 0.95), who flaunts safety protocols, pushes on.
+   Jasper away (`Jasper, go mine coal`), and type `/time set 12000`. At dusk
+   the console shows whether a bot with a task races back or pushes on.
+   Careful Haley (risk 0.2) goes to bed. Jasper (risk 0.95), who flaunts
+   safety protocols, pushes on. Ask one of them why (`Jasper, why?`) to
+   hear the reason in chat.
 4. **The dream journal.** When a bot sleeps, the console prints its dream
-   journal (tagged `dream`), and chat shows "Dreamt: ...". Show the commit:
+   journal (tagged `dream`) and a "Dreamt: ..." summary. Show the commit:
    `git -C memory/Jasper log -1 -p`.
 5. **Death with unsaved skills.** Teach a bot another skill, then kill it
-   before it sleeps (`/kill Jasper`). Chat shows "I died and forgot 1 skill(s)
-   (...)". `!Jasper memory` shows that the saved skills are still there and the
+   before it sleeps (`/kill Jasper`). The console shows "I died and forgot 1
+   skill(s) (...)". `!Jasper memory` shows that the saved skills are still there and the
    new one is gone. The other bots dream about the death the next night.
 6. **Inheritance (optional).** `/give Haley writable_book` and a chest. Say
    `!Haley place chest <x> <y> <z>` and `!Haley write_book all`. Then

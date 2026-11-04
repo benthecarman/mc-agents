@@ -135,8 +135,8 @@ struct Agent {
     late_lessons: Vec<String>,
     /// Last time the bot thought or had a goal; drives picking its own goals.
     busy_at: Instant,
-    /// Bots answering bots can loop forever; they get one reply per cooldown.
-    last_bot_reply: Option<Instant>,
+    /// The current goal came from a player, so the bot reports how it went.
+    goal_for_player: bool,
 }
 
 impl Agent {
@@ -194,8 +194,20 @@ impl Agent {
             last_dream: None,
             late_lessons: Vec::new(),
             busy_at: Instant::now(),
-            last_bot_reply: None,
+            goal_for_player: false,
         })
+    }
+
+    fn has_work(&self) -> bool {
+        self.goal.is_some() || self.executor.goal().is_some()
+    }
+
+    /// Says how a player's request went, even after the chat window closed.
+    fn report(&self, text: &str) {
+        if self.goal_for_player {
+            self.body.allow_speech(Duration::from_secs(15));
+        }
+        let _ = self.body.say(text);
     }
 
     fn note(&mut self, text: impl Into<String>) {
@@ -323,12 +335,9 @@ impl Agent {
                     return None;
                 }
                 self.note(format!("{from} said: {text}"));
-                if *from_bot {
-                    if self.last_bot_reply.is_some_and(|t| t.elapsed() < Duration::from_secs(45)) {
-                        return None;
-                    }
-                    self.last_bot_reply = Some(Instant::now());
-                }
+                // A player is talking to us: we may answer, and report on what they asked for.
+                self.body.allow_speech(Duration::from_secs(120));
+                self.goal_for_player = true;
                 let who = if *from_bot { "Your fellow bot" } else { "Player" };
                 Some((format!("{who} {from} says to you: \"{text}\""), Tier::Fast))
             }
@@ -363,7 +372,8 @@ impl Agent {
                 let tier = if self.failures_in_a_row >= 2 { Tier::Strong } else { Tier::Fast };
                 if self.failures_in_a_row > 5 {
                     log::log(&self.name, Kind::Fail, "too many failures in a row, giving up on the goal");
-                    let _ = self.body.say("I keep failing at this. Giving up for now.");
+                    self.report("I keep failing at this. Giving up for now.");
+                    self.goal_for_player = false;
                     self.executor.clear();
                     self.goal = None;
                     self.failures_in_a_row = 0;
@@ -375,16 +385,18 @@ impl Agent {
                 ))
             }
             BotEvent::PlanDone { .. } | BotEvent::StepFailed { .. } => None,
+            // With nothing to do for a player, a bot does not plan around the night.
+            BotEvent::Dusk { .. } | BotEvent::Night | BotEvent::InventoryFull if !self.has_work() => None,
             BotEvent::Dusk { seconds_left } => Some((
                 format!(
                     "Dusk: about {seconds_left} seconds until dark. Decide now, weighing the stakes and your risk appetite: \
-                     race back to a bed (sleeping saves your memory) or push on. Say your choice and the reason in chat."
+                     race back to a bed (sleeping saves your memory) or push on."
                 ),
                 Tier::Fast,
             )),
             BotEvent::Night => Some((
                 "It is night. Monsters spawn in the dark. Decide, weighing the stakes and your risk appetite: race back to a bed \
-                 or push on. Say your choice and the reason in chat."
+                 or push on."
                     .into(),
                 Tier::Fast,
             )),
@@ -427,14 +439,14 @@ impl Agent {
                         self.library.insert(skill.clone());
                         skills::register(&self.tools, &self.library, &self.body, skill);
                         log::log(&self.name, Kind::Skill, format!("learned {name} in {attempts} attempt(s); registered as a tool (unsaved until I sleep)"));
-                        let _ = self.body.say(&format!("I learned a new skill: {name}. I must sleep to remember it."));
+                        self.report(&format!("I learned a new skill: {name}. I must sleep to remember it."));
                         self.note(format!("learned skill {name}"));
                         let sig = self.library.signatures().into_iter().find(|s| s.starts_with(&format!("{name}("))).unwrap_or_default();
                         self.pending.insert(0, format!("You just learned skill {sig}; it ran once already as a test and is now an action tool. Continue the goal '{}'.", self.goal.clone().unwrap_or_default()));
                     }
                     None => {
                         log::log(&self.name, Kind::Fail, format!("could not learn {name} after {attempts} attempts"));
-                        let _ = self.body.say(&format!("I couldn't figure out {name}."));
+                        self.report(&format!("I couldn't figure out {name}."));
                         self.note(format!("failed to learn {name}"));
                         self.pending.insert(0, format!("Learning skill {name} failed: {}. Plan with the tools you have, without that skill.", truncate(detail, 300)));
                     }
@@ -472,10 +484,11 @@ impl Agent {
         }) {
             return first.name == self.name;
         }
-        let mentions_me = names(&lower, &self.name);
+        // Bots talk only to people, never to each other.
         if from_bot {
-            return mentions_me;
+            return false;
         }
+        let mentions_me = names(&lower, &self.name);
         let everyone = ["all", "everyone", "bots", "everybody"]
             .iter()
             .any(|w| lower.split(|c: char| !c.is_alphanumeric()).any(|t| t == *w));
@@ -525,8 +538,9 @@ impl Agent {
             return None;
         }
         self.busy_at = Instant::now();
+        self.goal_for_player = false;
         Some((
-            "You have had nothing to do for a while. Pick a goal that fits your personality and the time of day (gather, craft tools, mine, build, prepare for night), announce it with say, and call set_goal."
+            "You have had nothing to do for a while. Pick a goal that fits your personality and the time of day (gather, craft tools, mine, build, prepare for night), and call set_goal. Do not use say: nobody asked you."
                 .into(),
             Tier::Fast,
         ))
@@ -589,7 +603,7 @@ impl Agent {
              {lineage}\
              {others}\
              You think only when something happens; between thoughts your plan runs on its own.\n\n\
-             Tools you call now: look_around, inventory and where_is (results come back to you), say (chat, under 20 words), and the decision tools.\n\
+             Tools you call now: look_around, inventory and where_is (results come back to you), say (chat, under 20 words, only to answer a player who is talking to you), and the decision tools.\n\
              Action tools you can use as plan steps:\n{tools}\n\n\
              Rules:\n\
              - \"Come here\" from a player means a plan with go_to_player(player=<their name>).\n\
@@ -640,7 +654,7 @@ impl Agent {
             String::new()
         } else {
             format!(
-                "Other bots here, each with its own memory: {}. You may talk to them by name, but keep it short and don't chat back and forth.\n",
+                "Other bots here, each with its own memory: {}. Do not talk to them in chat.\n",
                 others.join("; ")
             )
         }
@@ -763,7 +777,8 @@ impl Agent {
 
     fn on_goal_done(&mut self, goal: &str) {
         self.goal = None;
-        let _ = self.body.say(&format!("Done: {}", truncate(goal, 80)));
+        self.report(&format!("Done: {}", truncate(goal, 80)));
+        self.goal_for_player = false;
         let llm = self.llm.clone();
         let body = self.body.clone();
         let events = self.events.clone();
@@ -971,12 +986,14 @@ impl Agent {
                 log::log(&self.name, Kind::Info, "reset");
             }
             "memory" => {
+                self.body.allow_speech(Duration::from_secs(30));
                 let text = format!("{} | {}", self.memory.long_term_summary(), self.memory.working_summary());
                 log::log(&self.name, Kind::Memory, &text);
                 let _ = self.body.say(&format!("{DEBUG_TAG} {}", truncate(&text.replace('\n', " "), 230)));
             }
             _ => {
                 let Some((tool, args)) = tools::parse_command(&command) else { return };
+                self.body.allow_speech(Duration::from_secs(300));
                 let tools = self.tools.clone();
                 let body = self.body.clone();
                 tokio::spawn(async move {

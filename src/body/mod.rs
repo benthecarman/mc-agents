@@ -45,6 +45,8 @@ pub struct Senses {
     /// Needed because with players_sleeping_percentage 0 the night can skip
     /// before anyone sees the sleeping pose.
     pub slept: bool,
+    /// Chat is allowed until then: a bot speaks only when a player talked to it.
+    pub speak_until: Option<Instant>,
 }
 
 #[derive(Clone)]
@@ -224,10 +226,29 @@ impl Body {
         .to_string())
     }
 
+    /// Lets the bot post in chat for a while, because a player talked to it.
+    pub fn allow_speech(&self, how_long: Duration) {
+        let until = Instant::now() + how_long;
+        let mut senses = self.senses.lock().unwrap();
+        if senses.speak_until.is_none_or(|t| t < until) {
+            senses.speak_until = Some(until);
+        }
+    }
+
+    pub fn may_speak(&self) -> bool {
+        self.senses.lock().unwrap().speak_until.is_some_and(|t| Instant::now() < t)
+    }
+
+    /// Posts in chat if a player is talking to the bot; otherwise the line
+    /// only goes to the console.
     pub fn say(&self, text: &str) -> ActionResult {
         let text: String = text.chars().take(240).collect();
         if text.trim().is_empty() {
             return Err("nothing to say".into());
+        }
+        if !self.may_speak() {
+            crate::log::log(&self.name, crate::log::Kind::Chat, format!("(not said) {text}"));
+            return Ok("kept to yourself: you post in chat only when a player is talking to you".into());
         }
         self.client.chat(text);
         Ok("said".into())

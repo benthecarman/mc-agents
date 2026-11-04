@@ -55,7 +55,6 @@ pub async fn run(
     let tools = console.as_ref().map(|c| powers(&body, c.clone()));
     let mut thinking = false;
     let mut calls: (u64, u32) = (0, 0);
-    let mut last_bot_reply: Option<Instant> = None;
     let mut last_whim = Instant::now();
     let whim_every = config.limits.god_whim_secs;
     {
@@ -85,11 +84,9 @@ pub async fn run(
                     continue;
                 }
                 if from_bot {
-                    if last_bot_reply.is_some_and(|t| t.elapsed() < Duration::from_secs(45)) {
-                        continue;
-                    }
-                    last_bot_reply = Some(Instant::now());
+                    continue; // only people can call on the god
                 }
+                body.allow_speech(Duration::from_secs(120));
                 log::log(&name, Kind::Event, format!("chat <{from}> {text}"));
                 let who = if from_bot { "The bot" } else { "The player" };
                 Some(format!("{who} {from} says: \"{text}\""))
@@ -101,7 +98,7 @@ pub async fn run(
                 last_whim = Instant::now();
                 Some(
                     "No one has called on you for a while. Look at who is around and decide whether to do ONE thing \
-                     to make the world more interesting (weather, time, a gift, a scare), or nothing. Announce what you do."
+                     to make the world more interesting (weather, time, a gift, a scare), or nothing. Do not use say: nobody called you."
                         .into(),
                 )
             }
@@ -122,6 +119,7 @@ pub async fn run(
         };
         let Some(prompt) = prompt else { continue };
         let Some(tools) = &tools else {
+            body.allow_speech(Duration::from_secs(5));
             let _ = body.say("I have no power here. (Set MC_CONSOLE.)");
             continue;
         };

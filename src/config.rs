@@ -159,10 +159,10 @@ fn default_inferences_per_turn() -> u32 {
     6
 }
 fn default_god_whim() -> u64 {
-    300
+    0
 }
 fn default_idle_goal() -> u64 {
-    90
+    0
 }
 fn default_turn_timeout() -> u64 {
     180

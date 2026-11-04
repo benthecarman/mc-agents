@@ -29,9 +29,10 @@ inferences_per_turn = 6
 skill_write_retries = 3
 turn_timeout_secs = 180
 # A bot with no goal for this long picks one that fits its personality.
-idle_goal_secs = 90
+# 0 = bots only do what players ask.
+idle_goal_secs = 0
 # The god bot acts unasked this often (0 = only when called by name).
-god_whim_secs = 300
+god_whim_secs = 0
 hardcore = false
 
 # The Spiral team: https://spiral.xyz/team/
