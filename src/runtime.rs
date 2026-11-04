@@ -16,11 +16,9 @@ use azalea::{
 use tokio::sync::mpsc;
 
 use crate::{
-    agent::{self, tools, BotEvent},
+    agent::{self, BotEvent},
     body::{Body, Senses},
-    brain::truncate,
     config::{BotConfig, Config},
-    log::{self, Kind},
 };
 
 /// azalea's per-bot state. It only carries a channel into the bot runtime.
@@ -51,7 +49,7 @@ pub fn spawn(bot: BotConfig, config: Config) -> Result<BotLink> {
                 events = Some(agent::start(b.clone(), bot.clone(), config.clone()));
                 body = Some(b);
             }
-            let (body, events) = (body.as_ref().unwrap(), events.as_ref().unwrap());
+            let events = events.as_ref().unwrap();
             let send = |e: BotEvent| {
                 let _ = events.send(e);
             };
@@ -79,7 +77,7 @@ pub fn spawn(bot: BotConfig, config: Config) -> Result<BotLink> {
                         continue;
                     }
                     if let Some(command) = debug_command(&bot.name, &content) {
-                        run_debug_command(body.clone(), command);
+                        send(BotEvent::Debug { command });
                         continue;
                     }
                     let from_bot = bot_names.contains(&sender);
@@ -111,24 +109,9 @@ pub fn spawn(bot: BotConfig, config: Config) -> Result<BotLink> {
     Ok(BotLink { tx: Some(tx) })
 }
 
-/// `!Ada mine log 3` or `!all look_around` runs a tool directly. For testing.
+/// `!Ada mine log 3`, `!all look_around`, `!Ada dream`: test commands.
 fn debug_command(name: &str, content: &str) -> Option<String> {
     let rest = content.strip_prefix('!')?;
     let (target, command) = rest.split_once(' ')?;
     (target.eq_ignore_ascii_case(name) || target == "all").then(|| command.trim().to_string())
-}
-
-fn run_debug_command(body: Body, command: String) {
-    tokio::spawn(async move {
-        let Some((tool, args)) = tools::parse_command(&command) else { return };
-        let set = tools::core_tools(body.clone());
-        log::log(&body.name, Kind::Tool, format!("debug {tool}({args})"));
-        let result = set.call(&tool, args).await;
-        let (kind, text) = match &result {
-            Ok(t) => (Kind::Result, t.clone()),
-            Err(e) => (Kind::Fail, e.clone()),
-        };
-        log::log(&body.name, kind, &text);
-        let _ = body.say(&truncate(&text, 230));
-    });
 }

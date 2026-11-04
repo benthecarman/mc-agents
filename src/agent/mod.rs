@@ -15,6 +15,7 @@
 //! model is busy. Events that need thought while a thought is in flight are
 //! queued and folded into the next one.
 
+pub mod dream;
 pub mod executor;
 pub mod learn;
 pub mod plan;
@@ -37,7 +38,7 @@ use crate::{
     brain::{describe_event, tools::GdkTools, tools::ToolSet, truncate, Llm, Tier, Turn},
     config::{BotConfig, Config},
     log::{self, Kind},
-    memory::Memory,
+    memory::{DreamResult, Memory, Nightmares},
     skills::{self, SkillLibrary},
 };
 
@@ -66,6 +67,9 @@ pub enum BotEvent {
     // From the skill learner and reflection.
     SkillLearned { name: String, skill: Option<crate::memory::Skill>, detail: String, calls: usize, attempts: u32 },
     Reflected { lessons: Vec<String>, calls: usize },
+    DreamDone { dream: DreamResult, calls: usize },
+    /// `!<bot> <command>` typed in chat, for testing.
+    Debug { command: String },
 }
 
 pub fn start(body: Body, bot: BotConfig, config: Config) -> mpsc::UnboundedSender<BotEvent> {
@@ -101,6 +105,14 @@ struct Agent {
     budget_warned: bool,
     recent: VecDeque<String>,
     last_reflex: HashMap<&'static str, Instant>,
+    dreaming: bool,
+    nightmares: Nightmares,
+    last_hurt: Option<(String, Instant)>,
+    /// Model work in flight (thinking, learning, reflecting, dreaming).
+    /// Death aborts it so nothing from the old life lands in the new one.
+    mind: Vec<tokio::task::AbortHandle>,
+    last_dream: Option<Instant>,
+    late_lessons: Vec<String>,
 }
 
 impl Agent {
@@ -149,6 +161,12 @@ impl Agent {
             budget_warned: false,
             recent: VecDeque::new(),
             last_reflex: HashMap::new(),
+            dreaming: false,
+            nightmares: Nightmares::new("memory"),
+            last_hurt: None,
+            mind: Vec::new(),
+            last_dream: None,
+            late_lessons: Vec::new(),
         })
     }
 
@@ -174,7 +192,11 @@ impl Agent {
 
     fn log_event(&self, event: &BotEvent) {
         let text = match event {
-            BotEvent::ThoughtDone { .. } | BotEvent::ThoughtFailed { .. } | BotEvent::SkillLearned { .. } | BotEvent::Reflected { .. } => return,
+            BotEvent::ThoughtDone { .. }
+            | BotEvent::ThoughtFailed { .. }
+            | BotEvent::SkillLearned { .. }
+            | BotEvent::Reflected { .. }
+            | BotEvent::DreamDone { .. } => return,
             BotEvent::Chat { from, text, .. } => format!("chat <{from}> {text}"),
             BotEvent::StepFailed { step, error, .. } => format!("step_failed {step}: {}", truncate(error, 160)),
             BotEvent::PlanDone { .. } => "goal_done".into(),
@@ -196,6 +218,20 @@ impl Agent {
 
     /// Fast reactions in plain Rust. Returns true when the event is handled.
     async fn reflex(&mut self, event: &BotEvent) -> bool {
+        if let BotEvent::Damage { attacker } = event {
+            let what = attacker
+                .and_then(|id| attacker_kind(&self.body, id))
+                .unwrap_or_else(|| if self.body.head_in_water() { "drowning".into() } else { "the environment".into() });
+            self.last_hurt = Some((what, Instant::now()));
+        }
+        if self.body.health() <= 0.0 && !matches!(event, BotEvent::Death) {
+            // Already dead: the death event is next, don't act on a corpse.
+            return true;
+        }
+        if self.dreaming && self.body.is_sleeping() && !matches!(event, BotEvent::Death) {
+            // Asleep: nothing to react to but death.
+            return matches!(event, BotEvent::Damage { .. } | BotEvent::LowHealth | BotEvent::Hungry);
+        }
         match event {
             BotEvent::LowHealth if self.reflex_ready("flee", Duration::from_secs(6)) => {
                 self.executor.pause();
@@ -314,13 +350,28 @@ impl Agent {
             )),
             BotEvent::InventoryFull => Some(("Your inventory is full.".into(), Tier::Fast)),
             BotEvent::BedEntered => {
-                log::log(&self.name, Kind::Memory, "in bed");
+                // One dream per sleep: the pose and the sleep tool both report it.
+                let recently = self.last_dream.is_some_and(|t| t.elapsed() < Duration::from_secs(60));
+                if !self.dreaming && !recently {
+                    self.start_dream();
+                }
                 None
             }
+            BotEvent::DreamDone { dream, calls } => {
+                self.calls_today.1 += *calls as u32;
+                self.finish_dream(dream);
+                if let Some(goal) = self.goal.clone() {
+                    Some((format!("You woke up after sleeping. Continue the goal '{goal}'."), Tier::Strong))
+                } else {
+                    None
+                }
+            }
             BotEvent::Death => {
-                log::log(&self.name, Kind::Death, "died");
-                self.executor.clear();
-                self.goal = None;
+                self.on_death();
+                None
+            }
+            BotEvent::Debug { command } => {
+                self.debug(command.clone());
                 None
             }
             BotEvent::Damage { .. } | BotEvent::LowHealth | BotEvent::Hungry => None,
@@ -356,6 +407,10 @@ impl Agent {
                 for lesson in lessons {
                     log::log(&self.name, Kind::Memory, format!("lesson: {lesson}"));
                     let _ = self.memory.add_lesson(lesson);
+                    if self.dreaming {
+                        // Arrived after the dream started; keep it past consolidation.
+                        self.late_lessons.push(lesson.clone());
+                    }
                 }
                 None
             }
@@ -378,7 +433,7 @@ impl Agent {
     }
 
     fn request_thought(&mut self, text: String, tier: Tier) {
-        if self.thinking {
+        if self.thinking || self.dreaming {
             self.pending.push(text);
             if tier == Tier::Strong {
                 self.pending_tier = Tier::Strong;
@@ -520,7 +575,7 @@ impl Agent {
         let llm = self.llm.clone();
         let name = self.name.clone();
         let events = self.events.clone();
-        tokio::spawn(async move {
+        self.spawn_mind(async move {
             let log_name = name.clone();
             let outcome = llm
                 .run_turn(turn, move |e| {
@@ -598,10 +653,192 @@ impl Agent {
         let goal = goal.to_string();
         let results = self.executor.recent_results();
         let max = self.config.limits.inferences_per_turn;
-        tokio::spawn(async move {
+        self.spawn_mind(async move {
             let (lessons, calls) = learn::reflect(&llm, &body, &goal, &results, max).await;
             let _ = events.send(BotEvent::Reflected { lessons, calls });
         });
+    }
+
+    /// Bed entered: stop everything and dream on the strong model.
+    fn start_dream(&mut self) {
+        self.dreaming = true;
+        self.executor.pause();
+        let unsaved = self.memory.unsaved();
+        log::log(
+            &self.name,
+            Kind::Dream,
+            format!("asleep; dreaming over {} unsaved skills and {} lessons", unsaved.skills, unsaved.lessons),
+        );
+        let _ = self.body.say("Zzz... dreaming.");
+        let mut places = Vec::new();
+        if let Some(bed) = self.body.senses.lock().unwrap().bed {
+            places.push(format!("my bed at {} {} {}", bed.x, bed.y, bed.z));
+        }
+        if let Some(table) = self.body.find_block("crafting_table", 32) {
+            places.push(format!("crafting table at {} {} {}", table.x, table.y, table.z));
+        }
+        let input = dream::DreamInput {
+            memory: self.memory.clone(),
+            recent: self.recent.iter().cloned().collect(),
+            nightmares: self.nightmares.take(),
+            places,
+        };
+        let over_budget = self.calls_today.1 >= self.config.limits.llm_calls_per_day;
+        let llm = self.llm.clone();
+        let body = self.body.clone();
+        let events = self.events.clone();
+        let max = self.config.limits.inferences_per_turn;
+        self.spawn_mind(async move {
+            let (dream, calls) = if over_budget {
+                (dream::plain_dream(&input), 0)
+            } else {
+                dream::dream(&llm, &body, &input, max).await
+            };
+            let _ = events.send(BotEvent::DreamDone { dream, calls });
+        });
+    }
+
+    fn finish_dream(&mut self, dream: &DreamResult) {
+        self.dreaming = false;
+        self.last_dream = Some(Instant::now());
+        let night = self.memory.nights() + 1;
+        match self.memory.consolidate(dream, night) {
+            Ok(hash) => {
+                log::log(&self.name, Kind::Dream, format!("dream journal, night {night} (commit {hash}):"));
+                for line in dream.journal.lines().filter(|l| !l.trim().is_empty()) {
+                    log::log(&self.name, Kind::Dream, format!("  {line}"));
+                }
+                log::log(
+                    &self.name,
+                    Kind::Memory,
+                    format!(
+                        "long-term: {} skills ({}), {} rules; dropped {:?}",
+                        self.memory.long_term_skills().len(),
+                        dream.skills.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", "),
+                        dream.rules.len(),
+                        dream.drop
+                    ),
+                );
+                let _ = self.body.say(&format!("Dreamt: {}", truncate(&dream.summary, 150)));
+            }
+            Err(e) => log::log(&self.name, Kind::Fail, format!("could not save memory: {e:#}")),
+        }
+        for lesson in std::mem::take(&mut self.late_lessons) {
+            let _ = self.memory.add_lesson(&lesson);
+        }
+        self.resync_skills();
+        self.recent.clear();
+        let body = self.body.clone();
+        tokio::spawn(async move { body.wake_up().await });
+        self.executor.resume();
+        self.flush_pending();
+    }
+
+    /// Makes the tool set and library match what memory holds now.
+    fn resync_skills(&mut self) {
+        let known = self.memory.skills();
+        for skill in self.library.all() {
+            if !known.iter().any(|k| k.name == skill.name) {
+                self.library.remove(&skill.name);
+                self.tools.unregister(&skill.name);
+            }
+        }
+        for skill in known {
+            self.library.insert(skill.clone());
+            skills::register(&self.tools, &self.library, &self.body, &skill);
+        }
+    }
+
+    fn death_cause(&self) -> String {
+        let recent = self.body.system_messages_since(Instant::now() - Duration::from_secs(15));
+        if let Some(msg) = recent.iter().rev().find(|m| m.contains(&self.name)) {
+            return msg.clone();
+        }
+        match &self.last_hurt {
+            Some((what, when)) if when.elapsed() < Duration::from_secs(15) => format!("hurt by {what}"),
+            _ => "unknown causes".into(),
+        }
+    }
+
+    fn spawn_mind(&mut self, task: impl std::future::Future<Output = ()> + Send + 'static) {
+        self.mind.retain(|t| !t.is_finished());
+        self.mind.push(tokio::spawn(task).abort_handle());
+    }
+
+    /// Death: everything unsaved is gone. Tell the world what was lost.
+    fn on_death(&mut self) {
+        let cause = self.death_cause();
+        log::log(&self.name, Kind::Death, format!("died: {cause}"));
+        for task in self.mind.drain(..) {
+            task.abort();
+        }
+        self.executor.clear();
+        self.dreaming = false;
+        self.thinking = false;
+        self.pending.clear();
+        self.late_lessons.clear();
+        let lost_skills: Vec<String> = self.memory.working_skills().iter().map(|s| s.name.clone()).collect();
+        let lost_lessons = self.memory.lessons().len();
+        let doing = self.goal.clone().unwrap_or_else(|| "nothing in particular".into());
+        self.nightmares.add(&format!(
+            "{} died ({cause}) at {} while working on: {doing}",
+            self.name,
+            self.body.time().phase()
+        ));
+        if let Err(e) = self.memory.forget() {
+            log::log(&self.name, Kind::Fail, format!("forgetting failed: {e:#}"));
+        }
+        self.resync_skills();
+        self.goal = None;
+        self.recent.clear();
+        self.failures_in_a_row = 0;
+        let message = if lost_skills.is_empty() && lost_lessons == 0 {
+            "I died, but I had saved everything I knew.".to_string()
+        } else {
+            format!(
+                "I died and forgot {} skill(s){} and {lost_lessons} lesson(s). Should have slept.",
+                lost_skills.len(),
+                if lost_skills.is_empty() { String::new() } else { format!(" ({})", lost_skills.join(", ")) }
+            )
+        };
+        log::log(&self.name, Kind::Death, &message);
+        let body = self.body.clone();
+        tokio::spawn(async move {
+            // Say it after respawning so it shows up in chat.
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            let _ = body.say(&message);
+        });
+    }
+
+    fn debug(&mut self, command: String) {
+        match command.as_str() {
+            "dream" => {
+                if !self.dreaming {
+                    self.start_dream();
+                }
+            }
+            "forget" => self.on_death(),
+            "memory" => {
+                let text = format!("{} | {}", self.memory.long_term_summary(), self.memory.working_summary());
+                log::log(&self.name, Kind::Memory, &text);
+                let _ = self.body.say(&truncate(&text.replace('\n', " "), 240));
+            }
+            _ => {
+                let Some((tool, args)) = tools::parse_command(&command) else { return };
+                let tools = self.tools.clone();
+                let body = self.body.clone();
+                tokio::spawn(async move {
+                    log::log(&body.name, Kind::Tool, format!("debug {tool}({args})"));
+                    let result = tools.call(&tool, args).await;
+                    let (kind, text) = match &result {
+                        Ok(t) => (Kind::Result, t.clone()),
+                        Err(e) => (Kind::Fail, e.clone()),
+                    };
+                    log::log(&body.name, kind, &text);
+                    let _ = body.say(&truncate(&text, 230));
+                });
+            }
+        }
     }
 
     /// Hands the body to the skill learner. Thinking stays blocked until the
@@ -618,7 +855,7 @@ impl Agent {
             inferences_per_turn: self.config.limits.inferences_per_turn,
         };
         let events = self.events.clone();
-        tokio::spawn(async move {
+        self.spawn_mind(async move {
             let name = request.name.clone();
             let learned = learner.learn(request).await;
             let (skill, detail) = match learned.result {
@@ -686,7 +923,8 @@ fn spawn_ticker(body: Body, events: mpsc::UnboundedSender<BotEvent>) {
             last_phase = phase;
 
             let sleeping = body.is_sleeping();
-            if sleeping && !was_sleeping {
+            let slept = std::mem::take(&mut body.senses.lock().unwrap().slept);
+            if (sleeping && !was_sleeping) || slept {
                 let _ = events.send(BotEvent::BedEntered);
             }
             was_sleeping = sleeping;

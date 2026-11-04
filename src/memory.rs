@@ -246,6 +246,129 @@ impl Memory {
     }
 }
 
+/// What a dream decided. Applied by [`Memory::consolidate`].
+#[derive(Debug, Clone, Default)]
+pub struct DreamResult {
+    /// Skills to write to long-term memory (new, merged, fixed or kept).
+    pub skills: Vec<Skill>,
+    /// Long-term skills to delete.
+    pub drop: Vec<String>,
+    /// The full new list of rules.
+    pub rules: Vec<String>,
+    /// The full new list of places.
+    pub map: Vec<String>,
+    pub journal: String,
+    /// One chat line.
+    pub summary: String,
+}
+
+impl Memory {
+    /// Moves working memory into long-term memory as the dream decided and
+    /// commits with the journal entry as the message. Returns the short hash.
+    pub fn consolidate(&self, dream: &DreamResult, night: u64) -> Result<String> {
+        for name in &dream.drop {
+            let _ = fs::remove_file(self.root.join(format!("long_term/skills/{name}.rhai")));
+        }
+        for skill in &dream.skills {
+            let saved = Skill { saved: true, ..skill.clone() };
+            fs::write(
+                self.root.join(format!("long_term/skills/{}.rhai", skill.name)),
+                saved.to_file(),
+            )?;
+        }
+        let bullets = |title: &str, items: &[String]| {
+            let mut text = format!("# {title}\n");
+            for item in items {
+                text.push_str(&format!("- {}\n", item.replace('\n', " ")));
+            }
+            text
+        };
+        fs::write(self.root.join("long_term/rules.md"), bullets("Rules", &dream.rules))?;
+        fs::write(self.root.join("long_term/map.md"), bullets("Map", &dream.map))?;
+        let mut journal = self.journal();
+        journal.push_str(&format!("\n## Night {night}\n\n{}\n", dream.journal.trim()));
+        fs::write(self.root.join("long_term/journal.md"), journal)?;
+
+        // Working memory is now consolidated; clear it.
+        let _ = fs::remove_dir_all(self.root.join("working"));
+        fs::create_dir_all(self.root.join("working/skills"))?;
+
+        let title: String = format!("Night {night}: {}", dream.summary.trim())
+            .chars()
+            .take(72)
+            .collect();
+        self.commit(&format!("{title}\n\n{}", dream.journal.trim()))?;
+        Ok(self.git(&["rev-parse", "--short", "HEAD"])?.trim().to_string())
+    }
+
+    /// Death: put the tree back to the last commit. Untracked working memory
+    /// is deleted; long-term files are restored.
+    pub fn forget(&self) -> Result<()> {
+        self.git(&["checkout", "--", "."])?;
+        self.git(&["clean", "-fdq"])?;
+        fs::create_dir_all(self.root.join("working/skills"))?;
+        Ok(())
+    }
+
+    /// Hardcore death: long-term memory goes too. The new generation starts
+    /// from an empty but still versioned memory.
+    pub fn wipe_long_term(&self, generation: u32, cause: &str) -> Result<()> {
+        self.forget()?;
+        for entry in fs::read_dir(self.root.join("long_term/skills"))?.flatten() {
+            if entry.path().extension().is_some_and(|x| x == "rhai") {
+                fs::remove_file(entry.path())?;
+            }
+        }
+        fs::write(self.root.join("long_term/rules.md"), "# Rules\n")?;
+        fs::write(self.root.join("long_term/map.md"), "# Map\n")?;
+        let mut journal = self.journal();
+        journal.push_str(&format!("\n## Generation {generation}\n\nThe previous generation died: {cause}. Nothing was inherited.\n"));
+        fs::write(self.root.join("long_term/journal.md"), journal)?;
+        self.commit(&format!("Generation {generation} begins\n\nThe previous generation died: {cause}."))?;
+        Ok(())
+    }
+
+    /// How many nights this bot has slept, from the memory's git history.
+    pub fn nights(&self) -> u64 {
+        self.git(&["log", "--oneline", "--grep", "^Night "])
+            .map(|out| out.lines().count() as u64)
+            .unwrap_or(0)
+    }
+
+    pub fn generation(&self) -> u32 {
+        self.journal().matches("## Generation ").count() as u32 + 1
+    }
+}
+
+/// Shared across bots: deaths waiting to become someone's lesson.
+pub struct Nightmares {
+    path: PathBuf,
+}
+
+impl Nightmares {
+    pub fn new(base: impl AsRef<Path>) -> Self {
+        let _ = fs::create_dir_all(base.as_ref());
+        Self {
+            path: base.as_ref().join("nightmares.md"),
+        }
+    }
+
+    pub fn add(&self, text: &str) {
+        let mut all = fs::read_to_string(&self.path).unwrap_or_default();
+        all.push_str(&format!("- {}\n", text.replace('\n', " ")));
+        let _ = fs::write(&self.path, all);
+    }
+
+    /// Takes every pending nightmare, so only one sleeper dreams each.
+    pub fn take(&self) -> Vec<String> {
+        let all = fs::read_to_string(&self.path).unwrap_or_default();
+        let _ = fs::remove_file(&self.path);
+        all.lines()
+            .filter_map(|l| l.strip_prefix("- ").map(str::to_string))
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,6 +391,45 @@ mod tests {
         let skill = &m.skills()[0];
         assert_eq!(skill.name, "gather_wood");
         assert!(skill.code.contains("mine("));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn sleep_commits_and_death_forgets() {
+        let dir = std::env::temp_dir().join(format!("mc-mem-cycle-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let m = Memory::open(&dir, "Test").unwrap();
+        let wood = Skill { name: "gather_wood".into(), description: "logs".into(), code: "fn gather_wood(n) { n }".into(), saved: false };
+        m.save_working_skill(&wood).unwrap();
+        m.add_lesson("trees are near spawn").unwrap();
+        m.consolidate(
+            &DreamResult {
+                skills: vec![wood],
+                rules: vec!["Gather wood before dusk".into()],
+                journal: "Learned to gather wood.".into(),
+                summary: "kept gather_wood".into(),
+                ..Default::default()
+            },
+            1,
+        )
+        .unwrap();
+        assert_eq!(m.unsaved().skills, 0);
+        assert_eq!(m.long_term_skills().len(), 1);
+        assert!(m.git(&["log", "-1", "--format=%B"]).unwrap().contains("Learned to gather wood"));
+
+        // An unsaved skill and lesson, then death.
+        m.save_working_skill(&Skill { name: "build_hut".into(), description: "".into(), code: "fn build_hut() {}".into(), saved: false }).unwrap();
+        m.add_lesson("huts need planks").unwrap();
+        fs::write(m.root().join("long_term/rules.md"), "# Rules\n- scribbled\n").unwrap();
+        m.forget().unwrap();
+        assert_eq!(m.unsaved().skills, 0);
+        assert_eq!(m.unsaved().lessons, 0);
+        assert_eq!(m.rules(), vec!["Gather wood before dusk".to_string()]);
+        assert_eq!(m.skills().len(), 1);
+
+        m.wipe_long_term(2, "fell in lava").unwrap();
+        assert!(m.skills().is_empty());
+        assert_eq!(m.generation(), 2);
         fs::remove_dir_all(&dir).unwrap();
     }
 }

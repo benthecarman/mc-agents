@@ -40,6 +40,10 @@ pub struct Senses {
     pub last_attacker: Option<(u32, Instant)>,
     /// The bed we last slept in.
     pub bed: Option<BlockPos>,
+    /// Set when a sleep succeeds; the agent takes it to start dreaming.
+    /// Needed because with players_sleeping_percentage 0 the night can skip
+    /// before anyone sees the sleeping pose.
+    pub slept: bool,
 }
 
 #[derive(Clone)]
@@ -747,9 +751,17 @@ impl Body {
         self.client.block_interact(bed);
         for _ in 0..40 {
             self.client.wait_ticks(1).await;
-            if self.is_sleeping() {
-                self.senses.lock().unwrap().bed = Some(bed);
-                return Ok(format!("in bed at {} {} {}", bed.x, bed.y, bed.z));
+            let skipped = !self.time().can_sleep() && !thundering
+                || self.system_messages_since(asked).iter().any(|m| m.contains("Sleeping through"));
+            if self.is_sleeping() || skipped {
+                let mut senses = self.senses.lock().unwrap();
+                senses.bed = Some(bed);
+                senses.slept = true;
+                return Ok(if skipped {
+                    format!("slept through the night in the bed at {} {} {}", bed.x, bed.y, bed.z)
+                } else {
+                    format!("in bed at {} {} {}", bed.x, bed.y, bed.z)
+                });
             }
         }
         let why = self.system_messages_since(asked);
