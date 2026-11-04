@@ -71,7 +71,8 @@ pub enum BotEvent {
     ThoughtFailed { error: String },
     // From the skill learner and reflection.
     SkillLearned { name: String, skill: Option<crate::memory::Skill>, detail: String, calls: usize, attempts: u32 },
-    Reflected { lessons: Vec<String>, calls: usize },
+    /// `reply` is the in-character line for the player who asked, if any.
+    Reflected { lessons: Vec<String>, reply: Option<String>, calls: usize },
     DreamDone { dream: DreamResult, calls: usize },
     /// Every few seconds, so the agent can notice it has nothing to do.
     Heartbeat,
@@ -137,6 +138,8 @@ struct Agent {
     busy_at: Instant,
     /// The current goal came from a player, so the bot reports how it went.
     goal_for_player: bool,
+    /// The player who asked for the current goal.
+    asked_by: Option<String>,
 }
 
 impl Agent {
@@ -195,6 +198,7 @@ impl Agent {
             late_lessons: Vec::new(),
             busy_at: Instant::now(),
             goal_for_player: false,
+            asked_by: None,
         })
     }
 
@@ -338,6 +342,7 @@ impl Agent {
                 // A player is talking to us: we may answer, and report on what they asked for.
                 self.body.allow_speech(Duration::from_secs(120));
                 self.goal_for_player = true;
+                self.asked_by = Some(from.clone());
                 let who = if *from_bot { "Your fellow bot" } else { "Player" };
                 Some((format!("{who} {from} says to you: \"{text}\""), Tier::Fast))
             }
@@ -455,8 +460,12 @@ impl Agent {
                 self.flush_pending();
                 None
             }
-            BotEvent::Reflected { lessons, calls } => {
+            BotEvent::Reflected { lessons, reply, calls } => {
                 self.calls_today.1 += *calls as u32;
+                if let Some(reply) = reply {
+                    self.body.allow_speech(Duration::from_secs(15));
+                    let _ = self.body.say(reply);
+                }
                 for lesson in lessons {
                     log::log(&self.name, Kind::Memory, format!("lesson: {lesson}"));
                     let _ = self.memory.add_lesson(lesson);
@@ -777,7 +786,11 @@ impl Agent {
 
     fn on_goal_done(&mut self, goal: &str) {
         self.goal = None;
-        self.report(&format!("Done: {}", truncate(goal, 80)));
+        // The reflection writes the reply to whoever asked, in character.
+        let voice = self.goal_for_player.then(|| learn::Voice {
+            personality: self.bot.personality.clone(),
+            player: self.asked_by.clone().unwrap_or_else(|| "the player".into()),
+        });
         self.goal_for_player = false;
         let llm = self.llm.clone();
         let body = self.body.clone();
@@ -786,8 +799,8 @@ impl Agent {
         let results = self.executor.recent_results();
         let max = self.config.limits.inferences_per_turn;
         self.spawn_mind(async move {
-            let (lessons, calls) = learn::reflect(&llm, &body, &goal, &results, max).await;
-            let _ = events.send(BotEvent::Reflected { lessons, calls });
+            let (lessons, reply, calls) = learn::reflect(&llm, &body, &goal, &results, voice.as_ref(), max).await;
+            let _ = events.send(BotEvent::Reflected { lessons, reply, calls });
         });
     }
 

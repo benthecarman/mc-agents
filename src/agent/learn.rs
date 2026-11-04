@@ -305,22 +305,52 @@ pub fn verify(check: &Value, before: &WorldState, after: &WorldState, body: &Bod
 }
 
 /// After a goal: 1-3 short lessons for working memory.
-pub async fn reflect(llm: &Llm, body: &Body, goal: &str, results: &[String], max_inferences: u32) -> (Vec<String>, usize) {
+/// Who the bot is, and who asked for the goal, so the reflection can also
+/// write the bot's reply to that player.
+pub struct Voice {
+    pub personality: String,
+    pub player: String,
+}
+
+/// Lessons from a finished goal and, given a [`Voice`], a one-line reply in
+/// character to the player who asked. One model turn does both.
+pub async fn reflect(
+    llm: &Llm,
+    body: &Body,
+    goal: &str,
+    results: &[String],
+    voice: Option<&Voice>,
+    max_inferences: u32,
+) -> (Vec<String>, Option<String>, usize) {
     let lessons: Arc<Mutex<Vec<String>>> = Arc::default();
+    let reply: Arc<Mutex<Option<String>>> = Arc::default();
     let set = ToolSet::new();
     {
         let lessons = lessons.clone();
+        let reply = reply.clone();
+        let mut properties = json!({"lessons": {"type": "array", "items": {"type": "string"}}});
+        let mut required = vec!["lessons"];
+        if let Some(voice) = voice {
+            properties["reply"] = json!({
+                "type": "string",
+                "description": format!(
+                    "One chat line to {} under 20 words, in your own voice, telling them how the task went",
+                    voice.player
+                ),
+            });
+            required.push("reply");
+        }
         set.register(ToolDef::new(
             "record_lessons",
             "Record 1-3 short lessons (under 20 words each) worth remembering from this goal.",
-            json!({
-                "type": "object",
-                "properties": {"lessons": {"type": "array", "items": {"type": "string"}}},
-                "required": ["lessons"]
-            }),
+            json!({"type": "object", "properties": properties, "required": required}),
             move |args| {
                 let lessons = lessons.clone();
+                let reply = reply.clone();
                 async move {
+                    if let Some(text) = args["reply"].as_str().map(str::trim).filter(|t| !t.is_empty()) {
+                        *reply.lock().unwrap() = Some(text.to_string());
+                    }
                     let list: Vec<String> = match &args["lessons"] {
                         Value::Array(a) => a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
                         Value::String(s) => vec![s.clone()],
@@ -333,10 +363,19 @@ pub async fn reflect(llm: &Llm, body: &Body, goal: &str, results: &[String], max
         ));
     }
     let stop = lessons.clone();
+    let mut system = String::from(
+        "You help a Minecraft bot learn from experience. Write concrete, reusable lessons \
+         (what worked, what failed and why, what to do next time). Call record_lessons once.",
+    );
+    if let Some(voice) = voice {
+        system.push_str(&format!(
+            "\nYou are also the bot, {}. Personality: {}\nThe player {} asked for this goal; \
+             write the reply as you would say it, in character, not as a status report.",
+            body.name, voice.personality, voice.player
+        ));
+    }
     let turn = Turn {
-        system: "You help a Minecraft bot learn from experience. Write concrete, reusable lessons \
-                 (what worked, what failed and why, what to do next time). Call record_lessons once."
-            .into(),
+        system,
         user: format!(
             "Goal finished: {goal}\nSteps and results:\n{}\nNow: {}",
             results.join("\n"),
@@ -347,11 +386,14 @@ pub async fn reflect(llm: &Llm, body: &Body, goal: &str, results: &[String], max
         max_inferences: max_inferences.min(2),
         stop_when: Some(Box::new(move |_| !stop.lock().unwrap().is_empty())),
     };
-    match llm.run_turn(turn, |_| {}).await {
+    let (found, calls) = match llm.run_turn(turn, |_| {}).await {
         Ok(outcome) => (lessons.lock().unwrap().clone(), outcome.model_calls()),
         Err(e) => {
             log::log(&body.name, Kind::Fail, format!("reflection failed: {e:#}"));
             (Vec::new(), 0)
         }
-    }
+    };
+    // Whoever asked always hears back, even if the model wrote no reply.
+    let reply = voice.map(|_| reply.lock().unwrap().clone().unwrap_or_else(|| format!("Done: {}", truncate(goal, 80))));
+    (found, reply, calls)
 }
