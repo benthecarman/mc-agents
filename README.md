@@ -77,6 +77,10 @@ console, so it needs `MC_CONSOLE`. Call it by name:
 - `Zeus, teleport me to Jasper` / `Zeus, give Haley a bed`
 - `@Zeus smite Jasper` (lightning, for those who deserve it)
 
+Players listed in the god's `obeys` (in `config.toml`) are its masters: it
+carries out whatever they command, smiting included, though it may grumble.
+Everyone else gets what the god thinks is reasonable.
+
 If you set `limits.god_whim_secs`, it also acts unasked that often (the
 default, 0, means only when called). Its
 powers are `set_weather`, `set_time`, `smite`, `teleport`, `give` and

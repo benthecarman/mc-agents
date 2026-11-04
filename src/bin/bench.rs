@@ -100,6 +100,7 @@ async fn run() -> Result<()> {
         personality: suite.personality.clone(),
         risk_appetite: 0.5,
         role: Default::default(),
+        obeys: Vec::new(),
         fast_model: None,
         strong_model: None,
     }];

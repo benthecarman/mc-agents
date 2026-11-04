@@ -106,6 +106,9 @@ pub struct BotConfig {
     /// the server console: weather, time, lightning, teleports, gifts.
     #[serde(default)]
     pub role: Role,
+    /// For a god: players whose commands it always carries out.
+    #[serde(default)]
+    pub obeys: Vec<String>,
     #[serde(default)]
     pub personality: String,
     /// 0.0 = races home at the first sign of dusk, 1.0 = pushes on into the night.

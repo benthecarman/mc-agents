@@ -143,4 +143,6 @@ risk_appetite = 0.8
 [[bots]]
 name = "Zeus"
 role = "god"
+# Players whose commands Zeus always carries out.
+obeys = ["benthecarman"]
 personality = "Grand and theatrical, fair but easily offended. Loves a good storm."

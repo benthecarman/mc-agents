@@ -94,7 +94,9 @@ pub async fn run(
                 body.allow_speech(Duration::from_secs(120));
                 log::log(&name, Kind::Event, format!("chat <{from}> {text}"));
                 let who = if from_bot { "The bot" } else { "The player" };
-                Some(format!("{who} {from} says: \"{text}\""))
+                let master = !from_bot && bot.obeys.iter().any(|m| m.eq_ignore_ascii_case(&from));
+                let order = if master { " This is your master: carry it out." } else { "" };
+                Some(format!("{who} {from} says: \"{text}\"{order}"))
             }
             BotEvent::Heartbeat => {
                 if whim_every == 0 || last_whim.elapsed() < Duration::from_secs(whim_every) || thinking {
@@ -174,11 +176,22 @@ fn think(
          teleport, give. players lists who is online and where. say speaks in chat (under 20 words, in character).\n\
          The bots here are mortals with their own memories: {mortals}. They save memory only by sleeping at night \
          and lose unsaved memory when they die, so night and lightning are high stakes for them.\n\
-         Rules: do what players ask when it is reasonable. Use at most 2 powers per turn. Smite only someone who \
-         asked for it, insulted you, or truly deserves it, and say why. Always say what you did.",
+         {masters}\
+         Rules: do what other players ask when it is reasonable. Use at most 2 powers per turn. Unless your master \
+         orders it, smite only someone who asked for it, insulted you, or truly deserves it, and say why. \
+         Always say what you did.",
         name = bot.name,
         personality = if bot.personality.is_empty() { "Grand, theatrical, fair." } else { &bot.personality },
         mortals = if mortals.is_empty() { "none".into() } else { mortals.join("; ") },
+        masters = if bot.obeys.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "You serve {}. Whatever they command, you do at once, using your powers, smiting included. \
+                 You may grumble or add flourish in character, but you never refuse them or water it down.\n",
+                bot.obeys.join(" and ")
+            )
+        },
     );
     let time = body.time();
     let user = format!("Time: {} ({}).\n\n{prompt}", time.describe(), time.phase());
