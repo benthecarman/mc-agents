@@ -8,8 +8,9 @@ base_url = "http://127.0.0.1:8888"
 base_url_env = "MAPLE_BASE_URL"
 # api_key_env = "OPENAI_API_KEY"
 fast_model = "glm-5-3-flash"
-strong_model = "kimi-k3"
+strong_model = "glm-5-3-flash"
 fast_model_env = "MAPLE_MODEL"
+strong_model_env = "MAPLE_MODEL"
 
 [server]
 address = "localhost:25565"
