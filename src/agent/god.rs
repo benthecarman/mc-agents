@@ -81,7 +81,7 @@ pub async fn run(
                 None
             }
             BotEvent::Chat { from, text, from_bot } => {
-                if !text.to_lowercase().contains(&name.to_lowercase()) || text.starts_with(super::DEBUG_TAG) {
+                if !super::names(&text, &name) || text.starts_with(super::DEBUG_TAG) {
                     continue;
                 }
                 if from_bot {

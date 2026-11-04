@@ -79,6 +79,15 @@ pub enum BotEvent {
     Debug { command: String },
 }
 
+/// Whether `text` names `name` as a whole word ("@Mat" yes, "matter" and
+/// "Matt" no), ignoring case.
+pub fn names(text: &str, name: &str) -> bool {
+    let name = name.to_lowercase();
+    text.to_lowercase()
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .any(|word| word == name)
+}
+
 pub fn start(body: Body, bot: BotConfig, config: Config) -> mpsc::UnboundedSender<BotEvent> {
     let (tx, rx) = mpsc::unbounded_channel();
     if bot.role == crate::config::Role::God {
@@ -464,11 +473,11 @@ impl Agent {
         }) {
             return first.name == self.name;
         }
-        let mentions_me = lower.contains(&self.name.to_lowercase());
+        let mentions_me = names(&lower, &self.name);
         if from_bot {
             return mentions_me;
         }
-        let any_bot = self.config.bots.iter().any(|b| lower.contains(&b.name.to_lowercase()));
+        let any_bot = self.config.bots.iter().any(|b| names(&lower, &b.name));
         let everyone = ["all", "everyone", "bots", "everybody"]
             .iter()
             .any(|w| lower.split(|c: char| !c.is_alphanumeric()).any(|t| t == *w));
@@ -1099,4 +1108,19 @@ fn spawn_ticker(body: Body, events: mpsc::UnboundedSender<BotEvent>) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::names;
+
+    #[test]
+    fn names_match_whole_words_only() {
+        assert!(names("@jeff come here", "Jeff"));
+        assert!(names("Mat, make planks", "Mat"));
+        assert!(!names("Matt, make planks", "Mat"));
+        assert!(!names("that does not matter", "Mat"));
+        assert!(!names("it was taken", "Ken"));
+        assert!(names("Ken: hi", "Ken"));
+    }
 }
