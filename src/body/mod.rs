@@ -455,7 +455,10 @@ impl Body {
     }
 
     pub async fn craft(&self, item: &str, n: u32) -> ActionResult {
-        let item = strip_ns(item);
+        let mut item = strip_ns(item);
+        if item == "sticks" {
+            item = "stick".into();
+        }
         let mut made_first = Vec::new();
         if !matches!(item.as_str(), "planks" | "stick") && !item.ends_with("_planks") {
             if let Some(recipe) = recipes::find(&item).first() {
@@ -720,10 +723,14 @@ impl Body {
         if self.is_sleeping() {
             return Ok("already sleeping".into());
         }
-        let time = self.time();
+        let mut time = self.time();
         let thundering = self.senses.lock().unwrap().thundering;
         if !time.can_sleep() && !thundering {
-            return Err(format!("not night (it is {}); beds work only at night", time.describe()));
+            // Within a minute of night: wait at the bed instead of failing.
+            let wait = 12542u64.checked_sub(time.ticks()).filter(|t| *t <= 1200);
+            if wait.is_none() {
+                return Err(format!("not night (it is {}); beds work only at night", time.describe()));
+            }
         }
         let beds = world::resolve_blocks("bed")?;
         let preferred = self.senses.lock().unwrap().bed;
@@ -744,6 +751,11 @@ impl Body {
             .collect();
         if !near.is_empty() {
             return Err(format!("monsters nearby ({}); deal with them first", near.join(", ")));
+        }
+        let waited = Instant::now();
+        while !time.can_sleep() && !self.senses.lock().unwrap().thundering && waited.elapsed() < Duration::from_secs(75) {
+            self.client.wait_ticks(20).await;
+            time = self.time();
         }
         let asked = Instant::now();
         self.client.look_at(bed.center());

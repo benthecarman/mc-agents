@@ -68,6 +68,8 @@ pub enum BotEvent {
     SkillLearned { name: String, skill: Option<crate::memory::Skill>, detail: String, calls: usize, attempts: u32 },
     Reflected { lessons: Vec<String>, calls: usize },
     DreamDone { dream: DreamResult, calls: usize },
+    /// Every few seconds, so the agent can notice it has nothing to do.
+    Heartbeat,
     /// `!<bot> <command>` typed in chat, for testing.
     Debug { command: String },
 }
@@ -113,6 +115,10 @@ struct Agent {
     mind: Vec<tokio::task::AbortHandle>,
     last_dream: Option<Instant>,
     late_lessons: Vec<String>,
+    /// Last time the bot thought or had a goal; drives picking its own goals.
+    busy_at: Instant,
+    /// Bots answering bots can loop forever; they get one reply per cooldown.
+    last_bot_reply: Option<Instant>,
 }
 
 impl Agent {
@@ -167,6 +173,8 @@ impl Agent {
             mind: Vec::new(),
             last_dream: None,
             late_lessons: Vec::new(),
+            busy_at: Instant::now(),
+            last_bot_reply: None,
         })
     }
 
@@ -196,7 +204,8 @@ impl Agent {
             | BotEvent::ThoughtFailed { .. }
             | BotEvent::SkillLearned { .. }
             | BotEvent::Reflected { .. }
-            | BotEvent::DreamDone { .. } => return,
+            | BotEvent::DreamDone { .. }
+            | BotEvent::Heartbeat => return,
             BotEvent::Chat { from, text, .. } => format!("chat <{from}> {text}"),
             BotEvent::StepFailed { step, error, .. } => format!("step_failed {step}: {}", truncate(error, 160)),
             BotEvent::PlanDone { .. } => "goal_done".into(),
@@ -294,6 +303,12 @@ impl Agent {
                     return None;
                 }
                 self.note(format!("{from} said: {text}"));
+                if *from_bot {
+                    if self.last_bot_reply.is_some_and(|t| t.elapsed() < Duration::from_secs(45)) {
+                        return None;
+                    }
+                    self.last_bot_reply = Some(Instant::now());
+                }
                 let who = if *from_bot { "Your fellow bot" } else { "Player" };
                 Some((format!("{who} {from} says to you: \"{text}\""), Tier::Fast))
             }
@@ -341,14 +356,20 @@ impl Agent {
             }
             BotEvent::PlanDone { .. } | BotEvent::StepFailed { .. } => None,
             BotEvent::Dusk { seconds_left } => Some((
-                format!("Dusk: about {seconds_left} seconds until dark. Decide now: head to a bed (sleeping saves your memory) or keep going."),
+                format!(
+                    "Dusk: about {seconds_left} seconds until dark. Decide now, weighing the stakes and your risk appetite: \
+                     race back to a bed (sleeping saves your memory) or push on. Say your choice and the reason in chat."
+                ),
                 Tier::Fast,
             )),
             BotEvent::Night => Some((
-                "It is night. Monsters spawn in the dark. Decide: sleep now if a bed is reachable, or keep going.".into(),
+                "It is night. Monsters spawn in the dark. Decide, weighing the stakes and your risk appetite: race back to a bed \
+                 or push on. Say your choice and the reason in chat."
+                    .into(),
                 Tier::Fast,
             )),
             BotEvent::InventoryFull => Some(("Your inventory is full.".into(), Tier::Fast)),
+            BotEvent::Heartbeat => self.idle_thought(),
             BotEvent::BedEntered => {
                 // One dream per sleep: the pose and the sleep tool both report it.
                 let recently = self.last_dream.is_some_and(|t| t.elapsed() < Duration::from_secs(60));
@@ -454,7 +475,31 @@ impl Agent {
             return;
         }
         self.thinking = true;
+        self.busy_at = Instant::now();
         self.think(text, tier, tier == Tier::Fast);
+    }
+
+    /// With nothing to do for a while, the bot picks a goal of its own.
+    fn idle_thought(&mut self) -> Option<(String, Tier)> {
+        let wait = self.config.limits.idle_goal_secs;
+        let busy = self.thinking || self.dreaming || self.goal.is_some() || self.executor.goal().is_some();
+        if busy {
+            self.busy_at = Instant::now();
+            return None;
+        }
+        if wait == 0 || self.busy_at.elapsed() < Duration::from_secs(wait) || self.body.is_sleeping() {
+            return None;
+        }
+        // Keep a quarter of the day's budget for chat and emergencies.
+        if self.calls_today.1 * 4 >= self.config.limits.llm_calls_per_day * 3 {
+            return None;
+        }
+        self.busy_at = Instant::now();
+        Some((
+            "You have had nothing to do for a while. Pick a goal that fits your personality and the time of day (gather, craft tools, mine, build, prepare for night), announce it with say, and call set_goal."
+                .into(),
+            Tier::Fast,
+        ))
     }
 
     fn flush_pending(&mut self) {
@@ -510,6 +555,8 @@ impl Agent {
         };
         format!(
             "You are {name}, a bot in a Minecraft survival world. Personality: {personality}\n\
+             Risk appetite: {risk:.1} (0 = never risks memory, 1 = gambles everything).\n\
+             {others}\
              You think only when something happens; between thoughts your plan runs on its own.\n\n\
              Tools you call now: look_around and inventory (results come back to you), say (chat, under 20 words), and the decision tools.\n\
              Action tools you can use as plan steps:\n{tools}\n\n\
@@ -525,8 +572,28 @@ impl Agent {
              - {finish}",
             name = self.name,
             personality = self.bot.personality,
+            others = self.others(),
             tools = plan::describe_tools(&self.tools, &actions),
         )
+    }
+
+    /// The other bots, so chat between them makes sense.
+    fn others(&self) -> String {
+        let others: Vec<String> = self
+            .config
+            .bots
+            .iter()
+            .filter(|b| b.name != self.name)
+            .map(|b| format!("{} ({})", b.name, b.personality))
+            .collect();
+        if others.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "Other bots here, each with its own memory: {}. You may talk to them by name, but keep it short and don't chat back and forth.\n",
+                others.join("; ")
+            )
+        }
     }
 
     fn context(&self, event: &str) -> String {
@@ -898,10 +965,15 @@ fn spawn_ticker(body: Body, events: mpsc::UnboundedSender<BotEvent>) {
         let mut was_full = false;
         let mut last_day = u64::MAX;
         let mut last_alarm = Instant::now() - Duration::from_secs(60);
+        let mut beats = 0u64;
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
             if !body.client.logged_in() {
                 continue;
+            }
+            beats += 1;
+            if beats % 10 == 0 {
+                let _ = events.send(BotEvent::Heartbeat);
             }
             let time: TimeOfDay = body.time();
             if time.0 == 0 {

@@ -174,6 +174,15 @@ pub fn all() -> Vec<Recipe> {
 /// the caller picks the variant it has ingredients for.
 pub fn find(item: &str) -> Vec<Recipe> {
     let item = item.trim_start_matches("minecraft:");
+    let found = find_exact(item);
+    match item.strip_suffix('s') {
+        // Models write plurals: "sticks", "chests", "beds".
+        Some(singular) if found.is_empty() => find_exact(singular),
+        _ => found,
+    }
+}
+
+fn find_exact(item: &str) -> Vec<Recipe> {
     all()
         .into_iter()
         .filter(|r| {

@@ -98,6 +98,9 @@ pub struct Limits {
     /// Gives up on a model turn that takes longer than this.
     #[serde(default = "default_turn_timeout")]
     pub turn_timeout_secs: u64,
+    /// A bot with no goal for this many seconds picks its own. 0 = never.
+    #[serde(default = "default_idle_goal")]
+    pub idle_goal_secs: u64,
 }
 
 impl Default for Limits {
@@ -108,6 +111,7 @@ impl Default for Limits {
             skill_write_retries: default_skill_retries(),
             hardcore: false,
             turn_timeout_secs: default_turn_timeout(),
+            idle_goal_secs: default_idle_goal(),
         }
     }
 }
@@ -117,6 +121,9 @@ fn default_calls_per_day() -> u32 {
 }
 fn default_inferences_per_turn() -> u32 {
     6
+}
+fn default_idle_goal() -> u64 {
+    90
 }
 fn default_turn_timeout() -> u64 {
     180
