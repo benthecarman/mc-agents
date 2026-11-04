@@ -386,17 +386,26 @@ impl Body {
         Ok(format!("reached {player} at {} {} {}", target.x.floor(), target.y.floor(), target.z.floor()))
     }
 
-    /// Walks to a player and tosses them `n` of an item (a name or a group
-    /// such as `log`).
+    /// Walks toward a player and drops `n` of an item (a name, a group such
+    /// as `log`, or `all` for everything) with the drop key. If the bot cannot
+    /// get all the way there, it drops the items where it stopped.
     pub async fn give_to(&self, player: &str, item: &str, n: u32) -> ActionResult {
         let item = strip_ns(item);
-        let n = n.clamp(1, 36 * 64) as i32;
-        let matches = |name: &str| crate::skills::item_matches(&item, name);
+        let everything = matches!(item.as_str(), "all" | "everything" | "*");
+        let matches = |name: &str| everything || crate::skills::item_matches(&item, name);
         let have: i32 = self.inventory_counts().iter().filter(|(k, _)| matches(k)).map(|(_, v)| *v).sum();
         if have == 0 {
-            return Err(format!("I have no {item} to give"));
+            return Err(if everything { "my inventory is empty".into() } else { format!("I have no {item} to give") });
         }
-        self.go_to_player(player).await?;
+        let n = if everything { have } else { n.clamp(1, 36 * 64) as i32 };
+        // Can't find them at all: nothing sensible to do. Can't reach them: drop here.
+        let walk = self.go_to_player(player).await;
+        if let Err(e) = &walk {
+            // where_is failed: we don't know where they are.
+            if e.contains("no player named") || e.contains("too far away for any of us") {
+                return Err(e.clone());
+            }
+        }
         let found: serde_json::Value = serde_json::from_str(&self.where_is(player)?).map_err(|e| e.to_string())?;
         let p = &found["position"];
         let target = Vec3::new(
@@ -431,7 +440,12 @@ impl Body {
             }
             self.client.wait_ticks(2).await;
         }
-        Ok(json!({"gave": given, "item": item, "to": player, "short_by": (n - given).max(0)}).to_string())
+        let apart = self.position().distance_to(target).round();
+        let mut result = json!({"dropped": given, "item": item, "for": player, "short_by": (n - given).max(0)});
+        if walk.is_err() {
+            result["note"] = json!(format!("could not get close; dropped them where I stand, {apart} blocks from {player}"));
+        }
+        Ok(result.to_string())
     }
 
     /// Mines up to `n` of the nearest blocks matching `block` and picks up

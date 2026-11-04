@@ -101,12 +101,16 @@ pub fn register_core(set: &ToolSet, body: Body) {
     );
     tool!(
         "give",
-        "Walk to a player and toss them items from your inventory. Item may be a name or a group (log, planks).",
-        object_schema(&[
-            ("player", "string", "Player name"),
-            ("item", "string", "Item name or group"),
-            ("count", "integer", "How many, 1-64"),
-        ]),
+        "Walk to a player and drop items for them (the drop key). Item may be a name, a group (log, planks), or all for everything you carry.",
+        json!({
+            "type": "object",
+            "properties": {
+                "player": {"type": "string", "description": "Player name"},
+                "item": {"type": "string", "description": "Item name, group (log, planks), or all"},
+                "count": {"type": "integer", "description": "How many (default 1; ignored for all)"}
+            },
+            "required": ["player", "item"]
+        }),
         |b, a| b.give_to(&text(&a, "player")?, &text(&a, "item")?, int_or(&a, "count", 1) as u32).await
     );
     tool!(
