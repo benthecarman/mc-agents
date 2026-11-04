@@ -140,6 +140,7 @@ struct Agent {
     goal_for_player: bool,
     /// The player who asked for the current goal.
     asked_by: Option<String>,
+    last_bot_reply: Option<Instant>,
 }
 
 impl Agent {
@@ -199,6 +200,7 @@ impl Agent {
             busy_at: Instant::now(),
             goal_for_player: false,
             asked_by: None,
+            last_bot_reply: None,
         })
     }
 
@@ -339,7 +341,14 @@ impl Agent {
                     return None;
                 }
                 self.note(format!("{from} said: {text}"));
-                // A player is talking to us: we may answer, and report on what they asked for.
+                if *from_bot {
+                    // Bots answering bots could go on forever: one reply per 45 s.
+                    if self.last_bot_reply.is_some_and(|t| t.elapsed() < Duration::from_secs(45)) {
+                        return None;
+                    }
+                    self.last_bot_reply = Some(Instant::now());
+                }
+                // Someone is talking to us: we may answer, and report on what they asked for.
                 self.body.allow_speech(Duration::from_secs(120));
                 self.goal_for_player = true;
                 self.asked_by = Some(from.clone());
@@ -484,10 +493,6 @@ impl Agent {
         if text.starts_with(DEBUG_TAG) {
             return false;
         }
-        // Bots talk only to people, never to each other.
-        if from_bot {
-            return false;
-        }
         let lower = text.to_lowercase();
         // "Zeus, take me to Rex" or "@Zeus ..." is for Zeus alone.
         let opening = lower.trim_start().trim_start_matches('@');
@@ -498,6 +503,10 @@ impl Agent {
             return first.name == self.name;
         }
         let mentions_me = names(&lower, &self.name);
+        // A bot is heard only when it names us; "everyone" from a bot is chatter.
+        if from_bot {
+            return mentions_me;
+        }
         let everyone = ["all", "everyone", "bots", "everybody"]
             .iter()
             .any(|w| lower.split(|c: char| !c.is_alphanumeric()).any(|t| t == *w));
@@ -663,7 +672,7 @@ impl Agent {
             String::new()
         } else {
             format!(
-                "Other bots here, each with its own memory: {}. Do not talk to them in chat.\n",
+                "Other bots here, each with its own memory: {}. You may ask them for help by name; keep it short and don't chat back and forth.\n",
                 others.join("; ")
             )
         }

@@ -106,8 +106,10 @@ azalea events ─► runtime ─► BotEvent queue ─► agent loop
 - **Chat.** A bot posts in chat only while a player is talking to it: for
   two minutes after a player names it, and once more to report how the
   player's task went. Everything else it would say (dusk decisions, dream
-  summaries, death notices) goes to the console, marked `(not said)`. Bots
-  ignore each other's chat.
+  summaries, death notices) goes to the console, marked `(not said)`. A
+  bot that names another bot counts as talking to it, so bots can ask each
+  other (and Zeus) for help. Each answers another bot at most once every
+  45 seconds, so they can't loop.
 - **Snapshots.** Every turn gets long-term memory, working memory, recent
   events, the world around the bot, the goal and the plan. It also gets a
   **stakes** line: unsaved skills and lessons, time until dark, distance to

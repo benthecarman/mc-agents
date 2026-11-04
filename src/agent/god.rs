@@ -57,6 +57,7 @@ pub async fn run(
     let mut calls: (u64, u32) = (0, 0);
     let mut last_whim = Instant::now();
     let whim_every = config.limits.god_whim_secs;
+    let mut last_bot_reply: Option<Instant> = None;
     {
         let events = events.clone();
         tokio::spawn(async move {
@@ -84,7 +85,11 @@ pub async fn run(
                     continue;
                 }
                 if from_bot {
-                    continue; // only people can call on the god
+                    // Bots may pray too, but not in a loop: one answer per 45 s.
+                    if last_bot_reply.is_some_and(|t: Instant| t.elapsed() < Duration::from_secs(45)) {
+                        continue;
+                    }
+                    last_bot_reply = Some(Instant::now());
                 }
                 body.allow_speech(Duration::from_secs(120));
                 log::log(&name, Kind::Event, format!("chat <{from}> {text}"));
