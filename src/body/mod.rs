@@ -4,6 +4,7 @@
 //! says what went wrong and, where possible, what to do instead. The agent
 //! reads these strings, so they are written for a model, not a human.
 
+pub mod books;
 pub mod recipes;
 mod world;
 

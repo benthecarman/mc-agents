@@ -38,9 +38,9 @@ use crate::{
 };
 
 /// Bot tools exposed to skills, with their positional parameters.
-pub const BOT_API: [&str; 12] = [
+pub const BOT_API: [&str; 14] = [
     "look_around", "inventory", "goto", "follow", "mine", "place", "craft", "smelt", "say", "eat",
-    "attack", "sleep",
+    "attack", "sleep", "write_book", "read_book",
 ];
 
 pub const API_DOCS: &str = "\
@@ -57,6 +57,7 @@ Bot API (every call blocks until the action is done; on failure it throws an err
   craft(item, count) -> #{crafted, count}    // makes missing planks/sticks itself
   smelt(item, count)
   say(text), eat(), attack(target), sleep()
+  write_book(skills)          // \"all\" or \"a,b\": into the nearest chest; read_book() loads books nearby
   time() -> #{phase, tick}, hp() -> float, food() -> int
   log(text)                   // note for the debug log";
 

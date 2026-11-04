@@ -15,6 +15,10 @@
 //! model is busy. Events that need thought while a thought is in flight are
 //! queued and folded into the next one.
 
+/// Chat lines that answer test commands start with this; bots ignore them.
+const DEBUG_TAG: &str = "[debug]";
+
+pub mod books;
 pub mod dream;
 pub mod executor;
 pub mod learn;
@@ -146,6 +150,8 @@ impl Agent {
                 },
             ));
         }
+        books::register(&tools, &library, &body, &memory);
+        let nightmares = Nightmares::new("memory", &bot.name);
         let executor = Executor::new(body.clone(), tools.clone(), events.clone());
         Ok(Self {
             name: bot.name.clone(),
@@ -168,7 +174,7 @@ impl Agent {
             recent: VecDeque::new(),
             last_reflex: HashMap::new(),
             dreaming: false,
-            nightmares: Nightmares::new("memory"),
+            nightmares,
             last_hurt: None,
             mind: Vec::new(),
             last_dream: None,
@@ -441,6 +447,9 @@ impl Agent {
     /// Chat is for this bot if it names the bot, says "all"/"everyone"/"bots",
     /// or names no bot and this is the first bot in the config.
     fn addressed(&self, text: &str, from_bot: bool) -> bool {
+        if text.starts_with(DEBUG_TAG) {
+            return false;
+        }
         let lower = text.to_lowercase();
         let mentions_me = lower.contains(&self.name.to_lowercase());
         if from_bot {
@@ -556,6 +565,7 @@ impl Agent {
         format!(
             "You are {name}, a bot in a Minecraft survival world. Personality: {personality}\n\
              Risk appetite: {risk:.1} (0 = never risks memory, 1 = gambles everything).\n\
+             {lineage}\
              {others}\
              You think only when something happens; between thoughts your plan runs on its own.\n\n\
              Tools you call now: look_around and inventory (results come back to you), say (chat, under 20 words), and the decision tools.\n\
@@ -573,8 +583,26 @@ impl Agent {
             name = self.name,
             personality = self.bot.personality,
             others = self.others(),
+            lineage = self.lineage(),
             tools = plan::describe_tools(&self.tools, &actions),
         )
+    }
+
+    /// Hardcore lineage: which generation this is, and what books are for.
+    fn lineage(&self) -> String {
+        let generation = self.memory.generation();
+        let mut text = String::new();
+        if self.config.limits.hardcore {
+            text.push_str("Hardcore world: if you die, you lose ALL memory, saved or not. Only books in chests survive you.\n");
+        }
+        if generation > 1 {
+            text.push_str(&format!(
+                "You are generation {generation}: your earlier selves died. They may have left books of skills in chests nearby; \
+                 read_book them before relearning anything.\n"
+            ));
+        }
+        text.push_str("To pass skills on, write_book them into a chest (needs a writable_book).\n");
+        text
     }
 
     /// The other bots, so chat between them makes sense.
@@ -855,11 +883,30 @@ impl Agent {
         if let Err(e) = self.memory.forget() {
             log::log(&self.name, Kind::Fail, format!("forgetting failed: {e:#}"));
         }
+        let mut hardcore_message = None;
+        if self.config.limits.hardcore {
+            // Hardcore: long-term memory dies too. Only books survive.
+            let saved = self.memory.long_term_skills().len();
+            let rules = self.memory.rules().len();
+            let next = self.memory.generation() + 1;
+            match self.memory.wipe_long_term(next, &cause) {
+                Ok(()) => {
+                    let text = format!(
+                        "Generation {} died for good, taking {saved} saved skill(s) and {rules} rule(s). Generation {next} remembers nothing.",
+                        next - 1
+                    );
+                    hardcore_message = Some(text);
+                }
+                Err(e) => log::log(&self.name, Kind::Fail, format!("could not wipe memory: {e:#}")),
+            }
+        }
         self.resync_skills();
         self.goal = None;
         self.recent.clear();
         self.failures_in_a_row = 0;
-        let message = if lost_skills.is_empty() && lost_lessons == 0 {
+        let message = if let Some(text) = hardcore_message {
+            text
+        } else if lost_skills.is_empty() && lost_lessons == 0 {
             "I died, but I had saved everything I knew.".to_string()
         } else {
             format!(
@@ -888,7 +935,7 @@ impl Agent {
             "memory" => {
                 let text = format!("{} | {}", self.memory.long_term_summary(), self.memory.working_summary());
                 log::log(&self.name, Kind::Memory, &text);
-                let _ = self.body.say(&truncate(&text.replace('\n', " "), 240));
+                let _ = self.body.say(&format!("{DEBUG_TAG} {}", truncate(&text.replace('\n', " "), 230)));
             }
             _ => {
                 let Some((tool, args)) = tools::parse_command(&command) else { return };
@@ -902,7 +949,7 @@ impl Agent {
                         Err(e) => (Kind::Fail, e.clone()),
                     };
                     log::log(&body.name, kind, &text);
-                    let _ = body.say(&truncate(&text, 230));
+                    let _ = body.say(&format!("{DEBUG_TAG} {}", truncate(&text, 220)));
                 });
             }
         }

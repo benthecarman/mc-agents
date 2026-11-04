@@ -340,30 +340,41 @@ impl Memory {
     }
 }
 
-/// Shared across bots: deaths waiting to become someone's lesson.
+/// Shared across bots: an append-only list of deaths. Each bot dreams of
+/// the deaths of the others that it has not dreamt of yet.
 pub struct Nightmares {
     path: PathBuf,
+    seen: PathBuf,
+    bot: String,
 }
 
 impl Nightmares {
-    pub fn new(base: impl AsRef<Path>) -> Self {
+    pub fn new(base: impl AsRef<Path>, bot: &str) -> Self {
         let _ = fs::create_dir_all(base.as_ref());
         Self {
             path: base.as_ref().join("nightmares.md"),
+            seen: base.as_ref().join(format!(".nightmares-seen-{bot}")),
+            bot: bot.to_string(),
         }
     }
 
     pub fn add(&self, text: &str) {
         let mut all = fs::read_to_string(&self.path).unwrap_or_default();
-        all.push_str(&format!("- {}\n", text.replace('\n', " ")));
+        all.push_str(&format!("- [{}] {}\n", self.bot, text.replace('\n', " ")));
         let _ = fs::write(&self.path, all);
     }
 
-    /// Takes every pending nightmare, so only one sleeper dreams each.
+    /// Other bots' deaths since the last call.
     pub fn take(&self) -> Vec<String> {
         let all = fs::read_to_string(&self.path).unwrap_or_default();
-        let _ = fs::remove_file(&self.path);
-        all.lines()
+        let lines: Vec<&str> = all.lines().collect();
+        let seen: usize = fs::read_to_string(&self.seen).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+        let _ = fs::write(&self.seen, lines.len().to_string());
+        let mine = format!("- [{}] ", self.bot);
+        lines
+            .iter()
+            .skip(seen.min(lines.len()))
+            .filter(|l| !l.starts_with(&mine))
             .filter_map(|l| l.strip_prefix("- ").map(str::to_string))
             .collect()
     }
@@ -372,6 +383,19 @@ impl Nightmares {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nightmares_are_about_others_and_seen_once() {
+        let dir = std::env::temp_dir().join(format!("mc-nm-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let (ada, rex) = (Nightmares::new(&dir, "Ada"), Nightmares::new(&dir, "Rex"));
+        rex.add("Rex died in lava");
+        ada.add("Ada fell");
+        assert_eq!(ada.take(), vec!["[Rex] Rex died in lava"]);
+        assert!(ada.take().is_empty());
+        assert_eq!(rex.take(), vec!["[Ada] Ada fell"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn working_memory_overrides_and_counts() {
