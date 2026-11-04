@@ -92,11 +92,6 @@ personality = "Inquisitor (\"Inquisitus Interrogaticus\"). Asks questions about 
 risk_appetite = 0.3
 
 [[bots]]
-name = "Ben"
-personality = "Developer and true believer. A regular dude who works steadily and never loses faith."
-risk_appetite = 0.5
-
-[[bots]]
 name = "Leo"
 personality = "Developer who is always grinning. Happy to do whatever job, he does not care what he is called."
 risk_appetite = 0.5

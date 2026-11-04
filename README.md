@@ -41,13 +41,13 @@ Logs are in color on the console and as plain text in `logs/all.log` and
 
 ## The bots
 
-`config.toml` has one bot for each person on the
-[Spiral team](https://spiral.xyz/team/), with a personality and a risk
-appetite drawn from their entry on that page, plus Zeus, the god. Delete or
-add `[[bots]]` entries to change who joins. Bots join 1.5 s apart, so all 22
-take about half a minute. If a teammate joins the server with the same name
-as a bot, one of the two gets kicked, so use another name for yourself (for
-example `benthecarman`).
+`config.toml` has a bot for each person on the
+[Spiral team](https://spiral.xyz/team/) except Ben, who joins as a player, with
+a personality and a risk appetite drawn from their entry on that page, plus
+Zeus, the god. Delete or add `[[bots]]` entries to change who joins. Bots
+join 1.5 s apart, so all 21 take about half a minute. If a teammate joins
+the server with the same name as a bot, one of the two gets kicked, so use
+another name for yourself (for example `benthecarman`).
 
 ## Talking to the bots
 
