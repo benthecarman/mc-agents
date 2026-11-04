@@ -253,8 +253,19 @@ impl Llm {
             .find(|m| m.role == rmcp::model::Role::Assistant && !m.as_concat_text().trim().is_empty())
             .map(|m| strip_safety_tags(&m.as_concat_text()))
             .unwrap_or_default();
-        if let Some(error) = conversation.last().and_then(Message::error_kind) {
-            let error = anyhow::anyhow!("model call failed: {error:?}: {}", conversation.last().unwrap().as_concat_text());
+        if let Some(kind) = conversation.last().and_then(Message::error_kind) {
+            // The detail is in the error block; as_concat_text skips those.
+            let detail = conversation
+                .last()
+                .unwrap()
+                .content
+                .iter()
+                .find_map(|c| match c {
+                    goose_provider_types::conversation::message::MessageContentBlock::Error(e) => Some(e.message.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            let error = anyhow::anyhow!("model call failed: {kind:?}: {detail}");
             return Err((error, calls()));
         }
         let usage = store.usage.into_inner().unwrap();
