@@ -2,6 +2,7 @@
 name = "mc-agents"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 description = "Self-improving Minecraft bots: azalea body, goose GDK brain, Rhai skills"
 default-run = "mc-agents"
 
