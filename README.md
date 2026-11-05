@@ -3,6 +3,26 @@
 AI Minecraft bots that write their own skills, keep only what they save by
 sleeping, and forget what they did not save when they die.
 
+Built at a goose hackathon: 20 bots with their own personalities, plus Zeus,
+a god who runs the world. Each bot's brain is a
+[goose GDK](https://github.com/aaif-goose/goose) state machine used as a Rust
+library.
+
+- **Talk to them in chat.** `Haley, make a wooden pickaxe` makes a plan and
+  carries it out. `Haley, actually get dirt instead` interrupts her
+  mid-task. Each bot's current goal shows over its head.
+- **They write their own code.** A bot that needs a reusable ability writes
+  a [Rhai](https://rhai.rs) script, tests it in a sandbox, and adds it to its
+  own tools.
+- **Sleep is saving.** Each bot's memory is a git repository. Sleeping
+  dreams over the day and makes one commit. Dying before bed loses
+  everything since the last commit, and the other bots have nightmares
+  about it.
+- **The bots have personalities.** Risk appetite decides whether a bot races
+  home at dusk or pushes on, and a bot may say no to you.
+- **Zeus.** Weather, time, lightning, teleports, gifts, mob spawns, and
+  races between the bots that he judges and rewards.
+
 - **Body:** [azalea](https://github.com/azalea-rs/azalea) 0.15.1 (Minecraft Java 1.21.11).
 - **Brain:** the [goose GDK](https://github.com/aaif-goose/goose) as a Rust library
   (`goose-agent`, `goose-providers`). We assemble our own agent state machine and
@@ -14,18 +34,29 @@ sleeping, and forget what they did not save when they die.
 ## Setup
 
 1. **Dev shell.** Run `direnv allow` (or `nix develop`). It gives you Rust
-   nightly (pinned in `rust-toolchain.toml`) and JDK 21.
-2. **Secrets and console.** Copy `.env.example` to `.env`. direnv loads it.
-   - By default the bots use the local Maple proxy (`MAPLE_BASE_URL`,
-     `MAPLE_MODEL`), which needs no key. For a hosted API, set `llm.kind`,
-     `llm.base_url` and `llm.api_key_env` in `config.toml`, and put the key in
-     `.env`. Keys never go in `config.toml`, and the bots never log them.
-   - `MC_CONSOLE` gives the bots' launcher and the benchmark access to the
-     server console, for gamerules, the day length and benchmark setup. The
-     default is the pipe that `start.sh` creates.
-3. **Server.** Start it with `mc-server/start.sh` (put `server.jar` for 1.21.11
-   in `mc-server/` first). It is a local server with `online-mode=false`.
-   You can type commands in its terminal as usual.
+   nightly (pinned in `rust-toolchain.toml`) and JDK 21. Without Nix, install
+   [rustup](https://rustup.rs), which reads the pinned toolchain, and JDK 21.
+2. **Model.** Copy `.env.example` to `.env`. direnv loads it.
+   - We ran the bots on `deepseek-v4-1-flash` through a local
+     [Maple proxy](https://github.com/OpenSecretCloud/maple-proxy), which
+     speaks the OpenAI API (`MAPLE_BASE_URL`, `MAPLE_MODEL`).
+   - Any OpenAI-compatible endpoint works. In `config.toml`, set
+     `llm.base_url`, the models, and `llm.api_key_env = "OPENAI_API_KEY"`,
+     then put the key in `.env`. For Anthropic, also set
+     `llm.kind = "anthropic"`. Keys never go in `config.toml`, and the bots
+     never log them.
+   - Set `fallback_model` to another model on the same endpoint, or remove
+     it. Remove `fast_params` if your model does not accept
+     `reasoning_effort`.
+   - The bots need a model that calls tools reliably and answers in a second
+     or two. Every chat message is one model turn.
+3. **Server.** Put `server.jar` for 1.21.11 in `mc-server/`, read the
+   [Minecraft EULA](https://aka.ms/MinecraftEULA), and write `eula=true` to
+   `mc-server/eula.txt` if you accept it. Start the server with
+   `mc-server/start.sh`. It is a local server with `online-mode=false`, and
+   you can type commands in its terminal as usual. `MC_CONSOLE` in `.env`
+   gives the launcher, Zeus and the benchmark access to the server console
+   through the pipe that `start.sh` creates.
 4. **Bots.** Start them with `cargo run --release`. Every bot in `config.toml`
    joins. When `MC_CONSOLE` is set, the launcher first sets
    `players_sleeping_percentage 0` (one sleeping bot skips the night) and
@@ -96,10 +127,11 @@ carries out whatever they command, smiting included, though it may grumble.
 Everyone else gets what the god thinks is reasonable.
 
 If you set `limits.god_whim_secs`, it also acts unasked that often (the
-default, 0, means only when called). Its
-powers are `set_weather`, `set_time`, `smite`, `teleport`, `give` and
-`players`. Each one fills a fixed command template, and its arguments are
-checked: players must be online, and items and coordinates must be valid.
+default, 0, means only when called). Its powers are `set_weather`,
+`set_time`, `smite`, `teleport`, `give`, `spawn_mob`, `kill_mobs`,
+`start_challenge` and `players`. Each one fills a fixed command template,
+and its arguments are checked: players must be online, and items, mobs and
+coordinates must be valid.
 The model never writes a console command. The god uses the same daily
 model-call budget as the other bots.
 
@@ -168,6 +200,34 @@ azalea events ─► runtime ─► BotEvent queue ─► agent loop
 - **Budgets.** `limits.llm_calls_per_day` caps model calls per bot per
   in-game day. A quarter of the budget is kept for chat and emergencies.
   `limits.inferences_per_turn` and `limits.turn_timeout_secs` cap each turn.
+
+## Built on the goose GDK
+
+GDK gives you the agent loop as a state machine: an ordered list of steps,
+where each pass applies the first step that applies and then starts again
+from the top. Each bot runs one GDK turn per event, assembled in
+`src/brain/mod.rs`:
+
+```
+ToolOperation → SteerIn → StopWhen → TurnBudget → Inference
+```
+
+- `ToolOperation` runs the bot's tools (`GdkTools` in `src/brain/tools.rs`
+  adapts our tool set to GDK's `ToolProvider`).
+- `SteerIn` (ours) adds chat that arrives during the turn, after pending
+  tool calls are answered. It also throws away a plan the model submitted
+  before it saw the message, so the new message decides.
+- `StopWhen` (ours) ends the turn as soon as the model has decided
+  (submitted a plan, kept the plan, or asked to learn a skill).
+- `TurnBudget` (ours) caps model calls per turn, without a visible message.
+- `SystemPrompt` (ours) is the request preparer, and `Store` is the session
+  loader and effect handler. Both are a few lines each.
+
+Model settings go through `ModelConfig`: `reasoning_effort = "low"` on the
+fast tier took chat replies from 20–40 s to 1–2 s. If a turn's first model
+call fails, the turn is retried on `llm.fallback_model`. The dream, skill
+writer, reflection, god and improver are separate GDK turns with their own
+tools.
 
 ## Demo script
 
