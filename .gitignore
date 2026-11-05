@@ -13,3 +13,4 @@ mc-server/console.fifo
 bench/memory/
 bench/results/
 bench/scores.csv
+mc-server/eula.txt
