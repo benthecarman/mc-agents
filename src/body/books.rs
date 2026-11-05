@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use azalea::{
-    container::ContainerClientExt, prelude::*, protocol::packets::game::s_edit_book::ServerboundEditBook, BlockPos,
+    container::ContainerClientExt, prelude::*, protocol::packets::game::s_edit_book::ServerboundEditBook,
 };
 use azalea_inventory::{components::WrittenBookContent, ItemStack};
 
@@ -22,7 +22,6 @@ pub struct Book {
     pub title: String,
     pub author: String,
     pub text: String,
-    pub chest: Option<BlockPos>,
 }
 
 /// Splits text into pages, preferring line breaks.
@@ -62,12 +61,11 @@ fn book_of(stack: &ItemStack) -> Option<WrittenBookContent> {
     }
 }
 
-fn read(content: &WrittenBookContent, chest: Option<BlockPos>) -> Book {
+fn read(content: &WrittenBookContent) -> Book {
     Book {
         title: content.title.raw.clone(),
         author: content.author.clone(),
         text: content.pages.iter().map(|p| p.raw.to_string()).collect::<Vec<_>>().join(""),
-        chest,
     }
 }
 
@@ -144,7 +142,7 @@ impl Body {
             .slots()
             .iter()
             .filter_map(book_of)
-            .map(|b| read(&b, None))
+            .map(|b| read(&b))
             .collect();
         let chests = world::resolve_blocks("chest")?;
         let mut seen = Vec::new();
@@ -162,7 +160,7 @@ impl Body {
             self.client.wait_ticks(2).await;
             for stack in container.contents().unwrap_or_default() {
                 if let Some(book) = book_of(&stack) {
-                    books.push(read(&book, Some(chest)));
+                    books.push(read(&book));
                 }
             }
             container.close();

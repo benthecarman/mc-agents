@@ -271,7 +271,6 @@ impl Llm {
         let usage = store.usage.into_inner().unwrap();
         MODEL_CALLS.fetch_add(usage.len().max(1), std::sync::atomic::Ordering::Relaxed);
         Ok(TurnOutcome {
-            conversation,
             text,
             usage,
         })
@@ -308,7 +307,6 @@ pub struct Turn {
 pub const DEFAULT_TURN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
 pub struct TurnOutcome {
-    pub conversation: Conversation,
     /// The last thing the model said in plain text.
     pub text: String,
     pub usage: Vec<ProviderUsage>,

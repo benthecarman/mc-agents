@@ -101,10 +101,6 @@ impl Memory {
         Ok(memory)
     }
 
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
     pub fn git(&self, args: &[&str]) -> Result<String> {
         let output = Command::new("git")
             .args(["-c", &format!("user.name={}", self.bot)])
@@ -449,7 +445,7 @@ mod tests {
         // An unsaved skill and lesson, then death.
         m.save_working_skill(&Skill { name: "build_hut".into(), description: "".into(), code: "fn build_hut() {}".into(), saved: false }).unwrap();
         m.add_lesson("huts need planks").unwrap();
-        fs::write(m.root().join("long_term/rules.md"), "# Rules\n- scribbled\n").unwrap();
+        fs::write(m.root.join("long_term/rules.md"), "# Rules\n- scribbled\n").unwrap();
         m.forget().unwrap();
         assert_eq!(m.unsaved().skills, 0);
         assert_eq!(m.unsaved().lessons, 0);
