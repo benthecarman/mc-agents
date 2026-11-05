@@ -310,19 +310,3 @@ or run more generations.
   turn, on turn time, and on skill-write retries.
 - The god bot can run only its fixed command templates.
 - Use a local test server only.
-
-## Dependency note
-
-`vendor/azalea-crypto` and `vendor/azalea-auth` are the published azalea
-0.15.1 crates with their RustCrypto release-candidate pins moved to the final
-`rand`/`rand_core` 0.10 releases and `rsa` 0.10.0-rc.20. Without this, Cargo
-cannot build azalea and goose in one binary. The only code change is one
-renamed trait import (`TryRngCore` → `TryRng`).
-
-## Other binaries
-
-- `cargo run --bin gdk-hello` runs one GDK turn with one custom tool and
-  canned data. It needs no Minecraft server. Use it to check the model setup.
-- `cargo run --bin mc-say -- "Haley, hello" "!Haley memory"` joins as `Tester`,
-  says each line, and prints the chat that follows. It is for tests without a
-  game client.
